@@ -296,6 +296,19 @@ G1 adds a local, persisted policy store. By default it is `openrouter-control-po
 
 `inherit` (or a missing model entry) uses the configured global `policy`; `allowlist` compiles to `provider.only`; `blocklist` compiles to `provider.ignore`; and `custom` accepts a validated OpenRouter provider policy. G3 will add the management API and G4 the visual editor, so manual editing is temporary. Do not place API keys, prompts, or responses in this file.
 
+### OpenRouter metadata catalog (G2)
+
+The proxy caches the model directory in `openrouter-control-metadata.json` (change it with `--metadata-cache <path>` or `SHIM_METADATA_CACHE_PATH`). Metadata refresh is independent of model calls: a failed refresh preserves the most recent snapshot and returns `stale` rather than replacing it with an empty list.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/models` | Read or refresh the model catalog when its five-minute cache is stale |
+| `POST /api/models/refresh` | Force a model catalog refresh |
+| `GET /api/models/:modelId/endpoints` | Lazy-load cached provider endpoints for one model |
+| `POST /api/models/:modelId/endpoints/refresh` | Force endpoint refresh |
+
+The API returns a stable DTO and does not expose cached raw metadata. Provider display names and OpenRouter routing identifiers are separate fields; no identifier is derived from display text.
+
 ## Merge Modes
 
 ### merge (default)

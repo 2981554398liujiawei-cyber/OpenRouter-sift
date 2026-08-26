@@ -132,6 +132,28 @@ describe("per-model policy protocol injection", () => {
     expect(received).toEqual([expect.objectContaining({ provider: { only: ["relace"], allow_fallbacks: false }, stream: true })]);
   });
 
+  it("preserves Responses API streaming content while injecting policy", async () => {
+    const received: unknown[] = [];
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      received.push(JSON.parse(String(init?.body)));
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream({ start(controller) { controller.enqueue(encoder.encode("event: response.completed\ndata: {}\n\n")); controller.close(); } }), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const cfg = loadConfig({});
+    cfg.port = 0;
+    cfg.policy = { only: ["relace"] };
+    cfg.upstream_api_key = "test-key";
+    cfg.log_level = "silent";
+    const server = startServer(cfg);
+    servers.push(server);
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP listener");
+    const response = await nativeFetch(`http://127.0.0.1:${address.port}/v1/responses`, { method: "POST", headers: { authorization: "Bearer test-key", "content-type": "application/json" }, body: JSON.stringify({ model: "example/response", input: "x", stream: true }) });
+    expect(await response.text()).toBe("event: response.completed\ndata: {}\n\n");
+    expect(received).toEqual([expect.objectContaining({ stream: true, provider: { only: ["relace"] } })]);
+  });
+
   it("forwards Anthropic stream=true unchanged and preserves terminal SSE events", async () => {
     const received: unknown[] = [];
     globalThis.fetch = vi.fn(async (_url, init) => {

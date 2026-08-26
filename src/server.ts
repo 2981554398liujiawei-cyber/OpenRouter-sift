@@ -4,6 +4,9 @@ import { readJsonBody, writeJson, writeError, pipeFetchResponse, getInboundAuth 
 import { applyResolvedProviderPolicy } from "./policy/resolver.js";
 import { validateLocalAuth, validateMethod } from "./policy/validation.js";
 import { JsonPolicyStore } from "./storage/policies.js";
+import { JsonMetadataStore } from "./storage/metadata.js";
+import { OpenRouterCatalog } from "./openrouter/catalog.js";
+import { OpenRouterClient, OpenRouterMetadataError } from "./openrouter/client.js";
 import { makeLogger } from "./util/log.js";
 import { redactBody } from "./util/redact.js";
 import { getVersion } from "./util/version.js";
@@ -107,6 +110,15 @@ export function startServer(cfg: ShimConfig): http.Server {
   } catch (err: any) {
     log.error({ err: err?.message ?? String(err), path: cfg.model_policy_store_path }, "model policy store unavailable; using global policy only");
   }
+  const metadataCatalog = new OpenRouterCatalog(
+    new OpenRouterClient({ apiKey: cfg.upstream_api_key ?? "" }),
+    new JsonMetadataStore(cfg.metadata_cache_path),
+  );
+  try {
+    metadataCatalog.load();
+  } catch (err: any) {
+    log.error({ err: err?.message ?? String(err), path: cfg.metadata_cache_path }, "metadata cache unavailable; continuing without cached metadata");
+  }
 
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
@@ -142,18 +154,37 @@ export function startServer(cfg: ShimConfig): http.Server {
         return;
       }
 
+      // Apply optional local authentication to both control-plane and proxy routes.
+      if (cfg.local_api_key) {
+        const authError = validateLocalAuth(req, cfg.local_api_key);
+        if (authError) return writeError(res, authError.status, authError.message, authError.code);
+      }
+
+      const endpointMatch = url.pathname.match(/^\/api\/models\/(.+)\/endpoints$/);
+      const endpointRefreshMatch = url.pathname.match(/^\/api\/models\/(.+)\/endpoints\/refresh$/);
+      const isMetadataRoute = url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || endpointMatch || endpointRefreshMatch;
+      if (isMetadataRoute) {
+        const expectedMethod = (url.pathname === "/api/models" || endpointMatch) ? "GET" : "POST";
+        if (req.method !== expectedMethod) return writeError(res, 405, "Method not allowed", "ERR_METHOD_NOT_ALLOWED");
+        const force = req.method === "POST";
+        try {
+          const matchedModel = endpointMatch ?? endpointRefreshMatch;
+          if (matchedModel) {
+            let modelId: string;
+            try { modelId = decodeURIComponent(matchedModel[1]); } catch { return writeError(res, 400, "Invalid model ID", "ERR_INVALID_MODEL_ID"); }
+            return writeJson(res, 200, await metadataCatalog.getModelEndpoints(modelId, force));
+          }
+          return writeJson(res, 200, await metadataCatalog.syncModels(force));
+        } catch (err: any) {
+          const status = err instanceof OpenRouterMetadataError && err.status ? err.status : 502;
+          return writeError(res, status, err instanceof OpenRouterMetadataError ? err.message : "OpenRouter metadata is unavailable", "ERR_METADATA_UNAVAILABLE");
+        }
+      }
+
       // Find upstream URL
       const upstream = upstreamUrlForPath(url.pathname, cfg);
       if (!upstream) {
         return writeError(res, 404, "Not found");
-      }
-
-      // Local auth (optional)
-      if (cfg.local_api_key) {
-        const authError = validateLocalAuth(req, cfg.local_api_key);
-        if (authError) {
-          return writeError(res, authError.status, authError.message, authError.code);
-        }
       }
 
       // Method validation

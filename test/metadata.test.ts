@@ -1,0 +1,118 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { OpenRouterCatalog } from "../src/openrouter/catalog";
+import { OpenRouterClient, OpenRouterMetadataError } from "../src/openrouter/client";
+import { JsonMetadataStore } from "../src/storage/metadata";
+
+const modelResponse = { data: [{ id: "openai/gpt-test", canonical_slug: "gpt-test", name: "GPT Test", context_length: 128000, pricing: { prompt: "0.1" }, architecture: { modality: "text" }, supported_parameters: ["tools"], created: 1 }] };
+const endpointResponse = { data: { endpoints: [{ provider_name: "Provider Display", provider_slug: "provider-routing-id", tag: "fp8", pricing: { prompt: "0.1" }, latency_last_30m: { p50: 1 }, throughput_last_30m: { p50: 100 }, uptime_last_5m: 0.99, quantization: "fp8", status: "available" }] } };
+
+function catalogWith(fetchImpl: typeof fetch, ttlMs = 300_000) {
+  const directory = mkdtempSync(join(tmpdir(), "openrouter-metadata-"));
+  const store = new JsonMetadataStore(join(directory, "metadata.json"));
+  return {
+    directory,
+    store,
+    catalog: new OpenRouterCatalog(new OpenRouterClient({ apiKey: "sk-or-secret", fetchImpl, timeoutMs: 20 }), store, ttlMs),
+  };
+}
+
+describe("OpenRouter metadata catalog", () => {
+  it("syncs models into a stable DTO without storing the API key", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(modelResponse), { status: 200 }));
+    const { catalog, store, directory } = catalogWith(fetchImpl as typeof fetch);
+    try {
+      const result = await catalog.syncModels();
+      expect(result).toMatchObject({ state: "fresh", data: [{ id: "openai/gpt-test", canonicalSlug: "gpt-test", contextLength: 128000 }] });
+      expect(fetchImpl.mock.calls[0][1]?.headers).toEqual(expect.objectContaining({ authorization: "Bearer sk-or-secret" }));
+      expect(JSON.stringify(store.getModels())).not.toContain("sk-or-secret");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("rejects malformed, unauthorized, and server-error model responses without exposing credentials", async () => {
+    for (const response of [new Response("{}", { status: 200 }), new Response("no", { status: 401 }), new Response("no", { status: 500 })]) {
+      const { catalog, directory } = catalogWith(vi.fn(async () => response) as typeof fetch);
+      try {
+        await expect(catalog.syncModels()).rejects.toBeInstanceOf(OpenRouterMetadataError);
+        await expect(catalog.syncModels()).rejects.not.toThrow("sk-or-secret");
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    }
+  });
+
+  it("reports a timeout without exposing the API key", async () => {
+    const fetchImpl = vi.fn((_url, init) => new Promise<Response>((_resolve, reject) => (init?.signal as AbortSignal).addEventListener("abort", () => reject(new Error("aborted")))));
+    const { catalog, directory } = catalogWith(fetchImpl as typeof fetch);
+    try {
+      await expect(catalog.syncModels()).rejects.toMatchObject({ code: "timeout" });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("propagates a caller AbortSignal to the metadata request", async () => {
+    const fetchImpl = vi.fn((_url, init) => new Promise<Response>((_resolve, reject) => (init?.signal as AbortSignal).addEventListener("abort", () => reject(new Error("aborted")))));
+    const controller = new AbortController();
+    const client = new OpenRouterClient({ apiKey: "sk-or-secret", fetchImpl: fetchImpl as typeof fetch, timeoutMs: 1_000 });
+    const request = client.getModels(controller.signal);
+    controller.abort();
+    await expect(request).rejects.toMatchObject({ code: "aborted" });
+  });
+
+  it("uses stale model cache when refresh fails", async () => {
+    const { catalog, store, directory } = catalogWith(vi.fn(async () => new Response("no", { status: 500 })) as typeof fetch, 0);
+    try {
+      store.setModels({ fetchedAt: "2020-01-01T00:00:00.000Z", value: [{ id: "cached", canonicalSlug: null, name: null, contextLength: null, pricing: null, architecture: null, supportedParameters: null, created: null }], raw: { data: [] } });
+      await expect(catalog.syncModels()).resolves.toMatchObject({ state: "stale", data: [{ id: "cached" }] });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("supports empty model results", async () => {
+    const { catalog, directory } = catalogWith(vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })) as typeof fetch);
+    try { await expect(catalog.syncModels()).resolves.toMatchObject({ state: "fresh", data: [] }); }
+    finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("fetches endpoints lazily and preserves provider display name separately from routing ID", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(endpointResponse), { status: 200 }));
+    const { catalog, directory } = catalogWith(fetchImpl as typeof fetch);
+    try {
+      const result = await catalog.getModelEndpoints("openai/gpt test");
+      expect(fetchImpl.mock.calls[0][0]).toContain("/models/openai/gpt%20test/endpoints");
+      expect(result.data[0]).toMatchObject({ providerName: "Provider Display", providerSlug: "provider-routing-id", providerRoutingId: "fp8", tag: "fp8", latencyLast30m: { p50: 1 } });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("handles optional endpoint metrics, 404s, invalid IDs, stale cache, and force refresh", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ data: { endpoints: [{ provider_name: "Only Name" }] } }), { status: 200 }));
+    const { catalog, store, directory } = catalogWith(fetchImpl as typeof fetch);
+    try {
+      await expect(catalog.getModelEndpoints("bad-id")).rejects.toMatchObject({ code: "invalid_response" });
+      await expect(catalog.getModelEndpoints("openai/minimal")).resolves.toMatchObject({ data: [{ providerName: "Only Name", providerSlug: null, latencyLast30m: null }] });
+      store.setEndpoints("openai/not-found", { fetchedAt: "2020-01-01T00:00:00.000Z", value: [], raw: {} });
+      (fetchImpl as any).mockImplementation(async () => new Response("missing", { status: 404 }));
+      await expect(catalog.getModelEndpoints("openai/not-found", true)).resolves.toMatchObject({ state: "stale", data: [] });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("rejects unknown models and malformed endpoint payloads when no cache exists", async () => {
+    const missing = catalogWith(vi.fn(async () => new Response("missing", { status: 404 })) as typeof fetch);
+    const malformed = catalogWith(vi.fn(async () => new Response(JSON.stringify({ data: {} }), { status: 200 })) as typeof fetch);
+    try {
+      await expect(missing.catalog.getModelEndpoints("openai/unknown")).rejects.toMatchObject({ status: 404, code: "http" });
+      await expect(malformed.catalog.getModelEndpoints("openai/malformed")).rejects.toMatchObject({ code: "invalid_response" });
+    } finally {
+      rmSync(missing.directory, { recursive: true, force: true });
+      rmSync(malformed.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects structurally corrupt cache entries instead of returning them", () => {
+    const { store, directory } = catalogWith(vi.fn() as typeof fetch);
+    try {
+      store.setModels({ fetchedAt: new Date().toISOString(), value: [], raw: {} });
+      const path = join(directory, "metadata.json");
+      writeFileSync(path, JSON.stringify({ version: 1, models: { fetchedAt: "not-a-date", value: [], raw: {} }, endpoints: {} }));
+      expect(() => new JsonMetadataStore(path).load()).toThrow("Invalid models metadata cache entry");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+});
