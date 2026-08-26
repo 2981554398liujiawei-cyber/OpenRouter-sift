@@ -87,6 +87,18 @@ export function safeResponseBodyForLogging(body: string, redact: boolean): strin
   }
 }
 
+function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => { cleanup(); reject(signal.reason ?? new Error("Upstream request aborted")); };
+    const timer = setTimeout(() => { cleanup(); resolve(); }, delayMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export function startServer(cfg: ShimConfig): http.Server {
   const log = makeLogger(cfg);
   const modelPolicies = new JsonPolicyStore(cfg.model_policy_store_path);
@@ -174,17 +186,6 @@ export function startServer(cfg: ShimConfig): http.Server {
           log.debug({ body: bodyToLog }, "request body");
         }
         
-        // Force non-streaming mode only for Claude Code (Anthropic Messages API)
-        // Claude Code has issues with SSE streaming from non-Claude models via OpenRouter
-        // OpenAI-compatible clients (Droid, etc.) should use streaming normally
-        const isAnthropicEndpoint = url.pathname === "/v1/messages";
-        if (body?.stream === true && isAnthropicEndpoint) {
-          body.stream = false;
-          if (cfg.log_level === "debug") {
-            log.debug({}, "disabled streaming for Anthropic API endpoint");
-          }
-        }
-
         // Debug: log model name and tools for troubleshooting
         if (cfg.log_level === "debug") {
           log.debug({ 
@@ -269,6 +270,15 @@ export function startServer(cfg: ShimConfig): http.Server {
       // Make upstream request with retry logic for rate limits
       let upstreamResp: Response;
       let retries = 0;
+      const upstreamAbort = new AbortController();
+      const cancelUpstreamForDisconnectedClient = () => {
+        if (!res.writableEnded && !upstreamAbort.signal.aborted) {
+          upstreamAbort.abort(new Error("Client disconnected"));
+        }
+      };
+      req.once("aborted", cancelUpstreamForDisconnectedClient);
+      res.once("close", cancelUpstreamForDisconnectedClient);
+      const timeout = setTimeout(() => upstreamAbort.abort(new Error("Upstream request timed out")), cfg.request_timeout_ms);
       
       // Custom retry delays: 1, 2, 4, 8, 12, 18, 24, 32 seconds
       const retryDelays = [1000, 2000, 4000, 8000, 12000, 18000, 24000, 32000];
@@ -278,8 +288,9 @@ export function startServer(cfg: ShimConfig): http.Server {
       const isClaudeCode = url.pathname === "/v1/messages";
       const maxRetries = isClaudeCode ? retryDelays.length : 0;
       
-      while (true) {
-        try {
+      try {
+        while (true) {
+          try {
           const requestBody = req.method === "POST" ? JSON.stringify(body) : undefined;
           
           // Debug: log the actual request body for troubleshooting
@@ -295,7 +306,7 @@ export function startServer(cfg: ShimConfig): http.Server {
             method: req.method,
             headers,
             body: requestBody,
-            signal: AbortSignal.timeout(cfg.request_timeout_ms),
+            signal: upstreamAbort.signal,
           });
           
           // If we get a 429 and retries are enabled, retry with custom delays
@@ -303,15 +314,20 @@ export function startServer(cfg: ShimConfig): http.Server {
             const delayMs = retryDelays[retries];
             retries++;
             log.info({ retries, delayMs, status: 429, isClaudeCode }, "rate limited, retrying");
-            await new Promise(resolve => setTimeout(resolve, delayMs));
+            try { await upstreamResp.body?.cancel(); } catch { /* response has no cancellable body */ }
+            await waitForRetry(delayMs, upstreamAbort.signal);
             continue;
           }
           
           break; // Success or non-retryable error
-        } catch (err: any) {
-          log.error({ err: err.message, upstream }, "upstream request failed");
-          return writeError(res, 502, `Upstream request failed: ${err.message}`, "ERR_UPSTREAM_FAILED");
+          } catch (err: any) {
+            if (upstreamAbort.signal.aborted && res.destroyed) return;
+            log.error({ err: err.message, upstream }, "upstream request failed");
+            return writeError(res, 502, `Upstream request failed: ${err.message}`, "ERR_UPSTREAM_FAILED");
+          }
         }
+      } finally {
+        clearTimeout(timeout);
       }
 
       // For error responses or non-streaming responses with tools, capture the body for logging
@@ -328,7 +344,7 @@ export function startServer(cfg: ShimConfig): http.Server {
       }
 
       // Pipe response back to caller
-      await pipeFetchResponse(upstreamResp, res);
+      await pipeFetchResponse(upstreamResp, res, upstreamAbort.signal);
 
       // Log request metadata (never log prompt content by default)
       const model = body?.model ?? body?.models?.[0] ?? "unknown";

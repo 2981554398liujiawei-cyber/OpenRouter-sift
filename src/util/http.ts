@@ -43,7 +43,7 @@ export function writeError(res: ServerResponse, status: number, message: string,
   });
 }
 
-export async function pipeFetchResponse(upstreamResp: Response, res: ServerResponse): Promise<void> {
+export async function pipeFetchResponse(upstreamResp: Response, res: ServerResponse, signal?: AbortSignal): Promise<void> {
   // Pass through key headers only. Avoid forwarding content-length if streaming.
   const ct = upstreamResp.headers.get("content-type") ?? "application/json";
   const headers: Record<string, string> = { "content-type": ct };
@@ -67,21 +67,47 @@ export async function pipeFetchResponse(upstreamResp: Response, res: ServerRespo
   }
 
   const reader = upstreamResp.body.getReader();
+  let complete = false;
   try {
     while (true) {
+      if (res.destroyed || signal?.aborted) return;
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        complete = true;
+        break;
+      }
       if (value) {
+        if (res.destroyed || signal?.aborted) return;
         // Write the chunk and handle backpressure
         const canContinue = res.write(value);
         if (!canContinue) {
-          // Wait for the drain event before continuing
-          await new Promise<void>((resolve) => res.once('drain', resolve));
+          // Wait for drain, but never leave a disconnected client hanging.
+          await new Promise<void>((resolve, reject) => {
+            const cleanup = () => {
+              res.off("drain", onDrain);
+              res.off("close", onClose);
+              res.off("error", onError);
+              signal?.removeEventListener("abort", onAbort);
+            };
+            const onDrain = () => { cleanup(); resolve(); };
+            const onClose = () => { cleanup(); reject(new Error("Client disconnected")); };
+            const onError = (error: Error) => { cleanup(); reject(error); };
+            const onAbort = () => { cleanup(); reject(signal?.reason ?? new Error("Upstream request aborted")); };
+            res.once("drain", onDrain);
+            res.once("close", onClose);
+            res.once("error", onError);
+            signal?.addEventListener("abort", onAbort, { once: true });
+          });
         }
       }
     }
+  } catch (error) {
+    if (!res.destroyed && !signal?.aborted) throw error;
   } finally {
-    res.end();
+    if (!complete) {
+      try { await reader.cancel(); } catch { /* connection already closed */ }
+    }
+    if (!res.destroyed) res.end();
   }
 }
 
