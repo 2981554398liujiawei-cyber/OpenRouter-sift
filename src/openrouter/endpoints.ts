@@ -10,6 +10,7 @@ const endpointSchema = z.object({
   pricing: nullableUnknown,
   context_length: z.number().nullable().optional(),
   max_completion_tokens: z.number().nullable().optional(),
+  max_prompt_tokens: z.number().nullable().optional(),
   quantization: z.string().nullable().optional(),
   supported_parameters: z.array(z.string()).nullable().optional(),
   latency_last_30m: z.unknown().optional(),
@@ -35,6 +36,7 @@ export interface EndpointDto {
   pricing: unknown | null;
   contextLength: number | null;
   maxCompletionTokens: number | null;
+  maxPromptTokens: number | null;
   quantization: string | null;
   supportedParameters: string[] | null;
   performance: {
@@ -77,6 +79,7 @@ export function parseEndpointsResponse(raw: unknown): ParsedEndpoints {
       pricing: endpoint.pricing,
       contextLength: endpoint.context_length ?? null,
       maxCompletionTokens: endpoint.max_completion_tokens ?? null,
+      maxPromptTokens: endpoint.max_prompt_tokens ?? null,
       quantization: endpoint.quantization ?? null,
       supportedParameters: endpoint.supported_parameters ?? null,
       performance: {

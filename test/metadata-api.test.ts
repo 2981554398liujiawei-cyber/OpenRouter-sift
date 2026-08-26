@@ -35,8 +35,8 @@ describe("metadata API", () => {
       const endpoints = await (await nativeFetch(`http://127.0.0.1:${address.port}/api/models/openai%2Fgpt-test/endpoints`)).json() as any;
       expect(models).toMatchObject({ state: "fresh", data: [{ id: "openai/gpt-test", contextLength: 100 }] });
       expect(models.data[0]).not.toHaveProperty("raw");
-      expect(endpoints).toMatchObject({ state: "fresh", data: [{ providerName: "OpenAI", providerRoutingId: "openai", status: 0, performance: { latencyLast30m: null, throughputLast30m: null } }] });
-      expect(endpoints.data[0]).not.toHaveProperty("raw");
+      expect(endpoints).toMatchObject({ items: [{ providerName: "OpenAI", providerRoutingId: "openai", status: 0, performance: { latencyLast30m: null, throughputLast30m: null } }] });
+      expect(endpoints.items[0]).not.toHaveProperty("raw");
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 

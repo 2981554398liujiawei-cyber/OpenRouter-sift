@@ -51,6 +51,7 @@ export interface ShimConfig {
   policy: ProviderPolicy;
   model_policy_store_path: string;
   metadata_cache_path: string;
+  settings_store_path: string;
 
   request_timeout_ms: number;
   max_body_bytes: number;
@@ -123,6 +124,7 @@ const ShimConfigSchema = z.object({
   policy: ProviderPolicySchema.default({}),
   model_policy_store_path: z.string().default(resolve(process.cwd(), "openrouter-control-policies.json")),
   metadata_cache_path: z.string().default(resolve(process.cwd(), "openrouter-control-metadata.json")),
+  settings_store_path: z.string().default(resolve(process.cwd(), "openrouter-control-settings.json")),
 
   request_timeout_ms: z.number().default(600000),
   max_body_bytes: z.number().default(50 * 1024 * 1024),
@@ -221,6 +223,7 @@ export interface CliOptions {
   maxPrice?: string;
   policyStore?: string;
   metadataCache?: string;
+  settingsStore?: string;
   [key: string]: unknown;
 }
 
@@ -246,6 +249,7 @@ export function loadConfig(cliOpts: CliOptions = {}): ShimConfig {
     merge_mode: process.env.SHIM_MERGE_MODE as MergeMode | undefined,
     model_policy_store_path: process.env.SHIM_MODEL_POLICY_STORE_PATH,
     metadata_cache_path: process.env.SHIM_METADATA_CACHE_PATH,
+    settings_store_path: process.env.SHIM_SETTINGS_STORE_PATH,
     log_level: process.env.SHIM_LOG_LEVEL as "silent" | "error" | "info" | "debug" | undefined,
   };
 
@@ -328,6 +332,7 @@ export function loadConfig(cliOpts: CliOptions = {}): ShimConfig {
     ...(envConfig.merge_mode && { merge_mode: envConfig.merge_mode }),
     ...(envConfig.model_policy_store_path && { model_policy_store_path: envConfig.model_policy_store_path }),
     ...(envConfig.metadata_cache_path && { metadata_cache_path: envConfig.metadata_cache_path }),
+    ...(envConfig.settings_store_path && { settings_store_path: envConfig.settings_store_path }),
     ...(envConfig.log_level && { log_level: envConfig.log_level }),
     // CLI overrides
     ...(cliOpts.host && { host: cliOpts.host }),
@@ -338,6 +343,7 @@ export function loadConfig(cliOpts: CliOptions = {}): ShimConfig {
     ...(cliOpts.mergeMode && { merge_mode: cliOpts.mergeMode }),
     ...(cliOpts.policyStore && { model_policy_store_path: resolve(cliOpts.policyStore) }),
     ...(cliOpts.metadataCache && { metadata_cache_path: resolve(cliOpts.metadataCache) }),
+    ...(cliOpts.settingsStore && { settings_store_path: resolve(cliOpts.settingsStore) }),
     ...(cliOpts.logLevel && { log_level: cliOpts.logLevel }),
     ...(cliOpts.logBody !== undefined && { log_body: cliOpts.logBody }),
     // Policy

@@ -26,6 +26,10 @@ export class JsonPolicyStore {
     return this.policies[modelId];
   }
 
+  list(): Record<string, ModelPolicy> {
+    return structuredClone(this.policies);
+  }
+
   set(modelId: string, policy: ModelPolicy): void {
     this.policies[modelId] = ModelPolicySchema.parse({ ...policy, updated_at: new Date().toISOString() });
     this.persist();

@@ -33,6 +33,9 @@ export const ModelPolicySchema = z.object({
   if (value.mode === "allowlist" && value.provider_order?.some((provider) => !value.providers?.includes(provider))) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Provider order must contain only allowlisted providers.", path: ["provider_order"] });
   }
+  if (value.provider_order && new Set(value.provider_order).size !== value.provider_order.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Provider order must not contain duplicates.", path: ["provider_order"] });
+  }
 });
 
 export function compileModelPolicy(modelPolicy: ModelPolicy | undefined): ProviderPolicy | undefined {

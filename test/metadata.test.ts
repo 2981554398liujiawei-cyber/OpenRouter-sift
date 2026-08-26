@@ -7,7 +7,7 @@ import { OpenRouterClient, OpenRouterMetadataError } from "../src/openrouter/cli
 import { JsonMetadataStore } from "../src/storage/metadata";
 
 const modelResponse = { data: [{ id: "openai/gpt-test", canonical_slug: "gpt-test", name: "GPT Test", context_length: 128000, pricing: { prompt: "0.1" }, architecture: { modality: "text" }, supported_parameters: ["tools"], created: 1 }] };
-const endpointResponse = { data: { endpoints: [{ provider_name: "Provider Display", provider_slug: "provider-routing-id", tag: "fp8", pricing: { prompt: "0.1" }, latency_last_30m: { p50: 1, p75: 2, p90: 3, p99: 4 }, throughput_last_30m: { p50: 100, p75: 90, p90: 80, p99: 70 }, uptime_last_5m: 0.99, uptime_last_30m: 0.98, uptime_last_1d: 0.97, quantization: "fp8", status: "available" }] } };
+const endpointResponse = { data: { endpoints: [{ provider_name: "Provider Display", provider_slug: "provider-routing-id", tag: "fp8", pricing: { prompt: "0.1" }, max_prompt_tokens: 64000, max_completion_tokens: 8000, latency_last_30m: { p50: 1, p75: 2, p90: 3, p99: 4 }, throughput_last_30m: { p50: 100, p75: 90, p90: 80, p99: 70 }, uptime_last_5m: 0.99, uptime_last_30m: 0.98, uptime_last_1d: 0.97, quantization: "fp8", status: "available" }] } };
 
 function catalogWith(fetchImpl: typeof fetch, ttlMs = 300_000) {
   const directory = mkdtempSync(join(tmpdir(), "openrouter-metadata-"));
@@ -72,13 +72,34 @@ describe("OpenRouter metadata catalog", () => {
     finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
+  it("deduplicates concurrent model and endpoint refreshes", async () => {
+    let resolveModels!: (response: Response) => void;
+    let resolveEndpoints!: (response: Response) => void;
+    const fetchImpl = vi.fn((url) => new Promise<Response>((resolve) => {
+      if (String(url).endsWith("/models")) resolveModels = resolve;
+      else resolveEndpoints = resolve;
+    }));
+    const { catalog, directory } = catalogWith(fetchImpl as typeof fetch);
+    try {
+      const modelsOne = catalog.syncModels(true);
+      const modelsTwo = catalog.syncModels(true);
+      resolveModels(new Response(JSON.stringify(modelResponse), { status: 200 }));
+      await Promise.all([modelsOne, modelsTwo]);
+      const endpointsOne = catalog.getModelEndpoints("openai/gpt-demo", true);
+      const endpointsTwo = catalog.getModelEndpoints("openai/gpt-demo", true);
+      resolveEndpoints(new Response(JSON.stringify(endpointResponse), { status: 200 }));
+      await Promise.all([endpointsOne, endpointsTwo]);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
   it("fetches endpoints lazily and preserves provider display name separately from routing ID", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify(endpointResponse), { status: 200 }));
     const { catalog, directory } = catalogWith(fetchImpl as typeof fetch);
     try {
       const result = await catalog.getModelEndpoints("openai/gpt test");
       expect(fetchImpl.mock.calls[0][0]).toContain("/models/openai/gpt%20test/endpoints");
-      expect(result.data[0]).toMatchObject({ providerName: "Provider Display", providerSlug: "provider-routing-id", providerRoutingId: "fp8", tag: "fp8", performance: { latencyLast30m: { p50: 1, p75: 2, p90: 3, p99: 4 }, throughputLast30m: { p50: 100, p75: 90, p90: 80, p99: 70 }, uptimeLast5m: 0.99, uptimeLast30m: 0.98, uptimeLast1d: 0.97 } });
+      expect(result.data[0]).toMatchObject({ providerName: "Provider Display", providerSlug: "provider-routing-id", providerRoutingId: "fp8", tag: "fp8", maxPromptTokens: 64000, maxCompletionTokens: 8000, performance: { latencyLast30m: { p50: 1, p75: 2, p90: 3, p99: 4 }, throughputLast30m: { p50: 100, p75: 90, p90: 80, p99: 70 }, uptimeLast5m: 0.99, uptimeLast30m: 0.98, uptimeLast1d: 0.97 } });
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 

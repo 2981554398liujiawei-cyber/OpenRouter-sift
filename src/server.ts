@@ -1,7 +1,8 @@
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { readJsonBody, writeJson, writeError, pipeFetchResponse, getInboundAuth } from "./util/http.js";
-import { applyResolvedProviderPolicy } from "./policy/resolver.js";
+import { applyResolvedProviderPolicy, resolveProviderPolicy } from "./policy/resolver.js";
+import { ModelPolicySchema, type ModelPolicy } from "./policy/modelPolicy.js";
 import { validateLocalAuth, validateMethod } from "./policy/validation.js";
 import { JsonPolicyStore } from "./storage/policies.js";
 import { JsonMetadataStore } from "./storage/metadata.js";
@@ -10,7 +11,8 @@ import { OpenRouterClient, OpenRouterMetadataError } from "./openrouter/client.j
 import { makeLogger } from "./util/log.js";
 import { redactBody } from "./util/redact.js";
 import { getVersion } from "./util/version.js";
-import type { ShimConfig } from "./config.js";
+import { ProviderPolicySchema, type ShimConfig } from "./config.js";
+import { JsonSettingsStore, type ControlSettings } from "./storage/settings.js";
 
 const OPENROUTER_BASE_V1 = "https://openrouter.ai/api/v1";
 
@@ -102,6 +104,51 @@ function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function maskedKey(key: string | undefined): string | null {
+  if (!key) return null;
+  return `••••${key.slice(-4)}`;
+}
+
+function policyForApi(modelPolicy: ModelPolicy | undefined): Record<string, unknown> {
+  if (!modelPolicy) return { mode: "inherit" };
+  return {
+    mode: modelPolicy.mode,
+    providers: modelPolicy.providers ?? [],
+    providerOrder: modelPolicy.provider_order ?? [],
+    allowFallbacks: modelPolicy.allow_fallbacks,
+    policy: modelPolicy.policy,
+    enabled: modelPolicy.enabled ?? true,
+  };
+}
+
+function parseApiPolicy(value: unknown): ModelPolicy {
+  if (!value || typeof value !== "object") throw new Error("Policy body must be a JSON object");
+  const input = value as Record<string, unknown>;
+  const customFields = {
+    only: input.only,
+    ignore: input.ignore,
+    order: input.order,
+    sort: input.sort,
+    allow_fallbacks: input.allowFallbacks ?? input.allow_fallbacks,
+    require_parameters: input.requireParameters ?? input.require_parameters,
+    data_collection: input.dataCollection ?? input.data_collection,
+    zdr: input.zdr,
+    quantizations: input.quantizations,
+    preferred_min_throughput: input.preferredMinThroughput ?? input.preferred_min_throughput,
+    preferred_max_latency: input.preferredMaxLatency ?? input.preferred_max_latency,
+    max_price: input.maxPrice ?? input.max_price,
+  };
+  const customPolicy = input.policy ?? (input.mode === "custom" && Object.values(customFields).some((field) => field !== undefined) ? customFields : undefined);
+  return ModelPolicySchema.parse({
+    mode: input.mode,
+    providers: input.providers,
+    provider_order: input.providerOrder ?? input.provider_order,
+    allow_fallbacks: input.allowFallbacks ?? input.allow_fallbacks,
+    policy: customPolicy,
+    enabled: input.enabled,
+  });
+}
+
 export function startServer(cfg: ShimConfig): http.Server {
   const log = makeLogger(cfg);
   const modelPolicies = new JsonPolicyStore(cfg.model_policy_store_path);
@@ -118,6 +165,17 @@ export function startServer(cfg: ShimConfig): http.Server {
     metadataCatalog.load();
   } catch (err: any) {
     log.error({ err: err?.message ?? String(err), path: cfg.metadata_cache_path }, "metadata cache unavailable; continuing without cached metadata");
+  }
+  const settingsStore = new JsonSettingsStore(cfg.settings_store_path);
+  let controlSettings: ControlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs() };
+  try {
+    const saved = settingsStore.load();
+    if (saved.mergeMode) cfg.merge_mode = saved.mergeMode;
+    if (saved.globalPolicy) cfg.policy = ProviderPolicySchema.parse(saved.globalPolicy);
+    if (typeof saved.metadataTtlMs === "number" && Number.isInteger(saved.metadataTtlMs) && saved.metadataTtlMs >= 1_000) metadataCatalog.setTtlMs(saved.metadataTtlMs);
+    controlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs() };
+  } catch (err: any) {
+    log.error({ err: err?.message ?? String(err), path: cfg.settings_store_path }, "settings store unavailable; using configured defaults");
   }
 
   const server = http.createServer(async (req, res) => {
@@ -145,6 +203,11 @@ export function startServer(cfg: ShimConfig): http.Server {
 
       // Handle CORS preflight
       if (req.method === "OPTIONS") {
+        if (url.pathname.startsWith("/api/")) {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
         res.writeHead(200, {
           "access-control-allow-origin": "*",
           "access-control-allow-methods": "GET, POST, OPTIONS",
@@ -160,24 +223,112 @@ export function startServer(cfg: ShimConfig): http.Server {
         if (authError) return writeError(res, authError.status, authError.message, authError.code);
       }
 
-      const endpointMatch = url.pathname.match(/^\/api\/models\/(.+)\/endpoints$/);
-      const endpointRefreshMatch = url.pathname.match(/^\/api\/models\/(.+)\/endpoints\/refresh$/);
-      const isMetadataRoute = url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || endpointMatch || endpointRefreshMatch;
-      if (isMetadataRoute) {
-        const expectedMethod = (url.pathname === "/api/models" || endpointMatch) ? "GET" : "POST";
-        if (req.method !== expectedMethod) return writeError(res, 405, "Method not allowed", "ERR_METHOD_NOT_ALLOWED");
-        const force = req.method === "POST";
-        try {
-          const matchedModel = endpointMatch ?? endpointRefreshMatch;
-          if (matchedModel) {
-            let modelId: string;
-            try { modelId = decodeURIComponent(matchedModel[1]); } catch { return writeError(res, 400, "Invalid model ID", "ERR_INVALID_MODEL_ID"); }
-            return writeJson(res, 200, await metadataCatalog.getModelEndpoints(modelId, force));
-          }
-          return writeJson(res, 200, await metadataCatalog.syncModels(force));
-        } catch (err: any) {
+      if (url.pathname.startsWith("/api/")) {
+        const endpointMatch = url.pathname.match(/^\/api\/models\/(.+)\/endpoints$/);
+        const endpointRefreshMatch = url.pathname.match(/^\/api\/models\/(.+)\/endpoints\/refresh$/);
+        const modelDetailMatch = url.pathname.match(/^\/api\/models\/(.+)$/);
+        const policyMatch = url.pathname.match(/^\/api\/policies\/(.+)$/);
+        const decodeModelId = (encoded: string): string | null => {
+          try { const value = decodeURIComponent(encoded); return value ? value : null; } catch { return null; }
+        };
+        const metadataError = (err: unknown) => {
           const status = err instanceof OpenRouterMetadataError && err.status ? err.status : 502;
           return writeError(res, status, err instanceof OpenRouterMetadataError ? err.message : "OpenRouter metadata is unavailable", "ERR_METADATA_UNAVAILABLE");
+        };
+        try {
+          if (url.pathname === "/api/status" && req.method === "GET") {
+            const catalogStatus = metadataCatalog.getStatus();
+            return writeJson(res, 200, { proxy: { running: true, host: cfg.host, port: cfg.port }, openrouter: { configured: Boolean(cfg.upstream_api_key), lastSuccessfulMetadataRequestAt: catalogStatus.lastSuccessfulMetadataRequestAt, lastError: catalogStatus.lastError }, catalog: { modelCount: catalogStatus.modelCount, fetchedAt: catalogStatus.fetchedAt, stale: catalogStatus.stale }, version: cfg._runtime.version });
+          }
+          if (url.pathname === "/api/models" && req.method === "GET") {
+            const snapshot = metadataCatalog.getModelsSnapshot();
+            const query = url.searchParams.get("q")?.trim().toLowerCase();
+            const filter = url.searchParams.get("policy");
+            const items = snapshot.data.filter((model) => {
+              const policy = modelPolicies.get(model.id);
+              const summary = policy?.mode ?? "inherit";
+              return (!query || model.id.toLowerCase().includes(query) || model.name?.toLowerCase().includes(query)) && (!filter || summary === filter);
+            }).map((model) => ({ id: model.id, name: model.name, contextLength: model.contextLength, pricing: model.pricing, policySummary: modelPolicies.get(model.id)?.mode ?? "inherit" }));
+            return writeJson(res, 200, { items, total: items.length, cache: { fetchedAt: snapshot.fetchedAt, stale: snapshot.state !== "fresh" } });
+          }
+          if (url.pathname === "/api/models/refresh" && req.method === "POST") return writeJson(res, 200, await metadataCatalog.syncModels(true));
+          if ((endpointMatch || endpointRefreshMatch) && req.method === (endpointMatch ? "GET" : "POST")) {
+            const modelId = decodeModelId((endpointMatch ?? endpointRefreshMatch)![1]);
+            if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            const result = await metadataCatalog.getModelEndpoints(modelId, Boolean(endpointRefreshMatch));
+            return writeJson(res, 200, { items: result.data, cache: { fetchedAt: result.fetchedAt, stale: result.state !== "fresh" } });
+          }
+          if (modelDetailMatch && req.method === "GET") {
+            const modelId = decodeModelId(modelDetailMatch[1]);
+            if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            const model = metadataCatalog.getModelsSnapshot().data.find((item) => item.id === modelId);
+            if (!model) return writeError(res, 404, "Model not found in local catalog", "MODEL_NOT_FOUND");
+            return writeJson(res, 200, { model, policy: policyForApi(modelPolicies.get(modelId)) });
+          }
+          if (url.pathname === "/api/policies" && req.method === "GET") {
+            return writeJson(res, 200, { items: Object.entries(modelPolicies.list()).map(([modelId, policy]) => ({ modelId, ...policyForApi(policy) })) });
+          }
+          if (policyMatch && req.method === "GET") {
+            const modelId = decodeModelId(policyMatch[1]);
+            if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            return writeJson(res, 200, { modelId, ...policyForApi(modelPolicies.get(modelId)) });
+          }
+          if (policyMatch && req.method === "PUT") {
+            const modelId = decodeModelId(policyMatch[1]);
+            if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            try {
+              const policy = parseApiPolicy(await readJsonBody(req, cfg.max_body_bytes));
+              modelPolicies.set(modelId, policy);
+              return writeJson(res, 200, { modelId, ...policyForApi(modelPolicies.get(modelId)) });
+            } catch (err: any) { return writeError(res, 400, err?.message ?? "Invalid policy", "INVALID_POLICY"); }
+          }
+          if (policyMatch && req.method === "DELETE") {
+            const modelId = decodeModelId(policyMatch[1]);
+            if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            modelPolicies.delete(modelId);
+            return writeJson(res, 200, { modelId, deleted: true });
+          }
+          if (url.pathname === "/api/policies/preview" && req.method === "POST") {
+            try {
+              const preview = await readJsonBody(req, cfg.max_body_bytes) as { modelId?: string; candidatePolicy?: unknown; incomingPolicy?: unknown };
+              const candidate = parseApiPolicy(preview.candidatePolicy);
+              const effectivePolicy = resolveProviderPolicy({ globalPolicy: cfg.policy, modelPolicy: candidate, incomingPolicy: preview.incomingPolicy as any, mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
+              return writeJson(res, 200, { modelId: preview.modelId ?? null, effectivePolicy, openRouterProviderPayload: effectivePolicy });
+            } catch (err: any) { return writeError(res, 400, err?.message ?? "Invalid policy preview", "INVALID_POLICY"); }
+          }
+          if (url.pathname === "/api/settings" && req.method === "GET") {
+            return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs() });
+          }
+          if (url.pathname === "/api/settings" && req.method === "PUT") {
+            try {
+              const update = await readJsonBody(req, cfg.max_body_bytes) as Record<string, unknown>;
+              if (typeof update.openRouterApiKey === "string" && update.openRouterApiKey) return writeError(res, 422, "Runtime OpenRouter API key updates are not supported; configure the key externally.", "API_KEY_EXTERNAL_ONLY");
+              let nextMergeMode = cfg.merge_mode;
+              let nextGlobalPolicy = cfg.policy;
+              let nextMetadataTtlMs = metadataCatalog.getTtlMs();
+              if (update.mergeMode !== undefined) {
+                if (update.mergeMode !== "merge" && update.mergeMode !== "override" && update.mergeMode !== "strict") return writeError(res, 400, "Invalid merge mode", "INVALID_SETTINGS");
+                nextMergeMode = update.mergeMode;
+              }
+              if (update.globalPolicy !== undefined) nextGlobalPolicy = ProviderPolicySchema.parse(update.globalPolicy);
+              if (update.metadataTtlMs !== undefined) {
+                if (typeof update.metadataTtlMs !== "number" || !Number.isInteger(update.metadataTtlMs) || update.metadataTtlMs < 1_000) return writeError(res, 400, "metadataTtlMs must be an integer of at least 1000", "INVALID_SETTINGS");
+                nextMetadataTtlMs = update.metadataTtlMs;
+              }
+              const nextSettings = { mergeMode: nextMergeMode, globalPolicy: nextGlobalPolicy, metadataTtlMs: nextMetadataTtlMs };
+              settingsStore.save(nextSettings);
+              cfg.merge_mode = nextMergeMode;
+              cfg.policy = nextGlobalPolicy;
+              metadataCatalog.setTtlMs(nextMetadataTtlMs);
+              controlSettings = nextSettings;
+              return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs() });
+            } catch { return writeError(res, 400, "Invalid settings", "INVALID_SETTINGS"); }
+          }
+          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || endpointMatch || endpointRefreshMatch || modelDetailMatch || policyMatch;
+          return writeError(res, knownRoute ? 405 : 404, knownRoute ? "Method not allowed" : "Management API endpoint not found", knownRoute ? "ERR_METHOD_NOT_ALLOWED" : "API_NOT_FOUND");
+        } catch (err) {
+          if (err instanceof OpenRouterMetadataError) return metadataError(err);
+          return writeError(res, 500, "Management API operation failed", "ERR_MANAGEMENT_INTERNAL");
         }
       }
 
