@@ -276,6 +276,26 @@ Create a `shim-config.json`:
 
 Run with: `npx openrouter-provider-shim serve --config shim-config.json`
 
+### Per-model policies (G1)
+
+G1 adds a local, persisted policy store. By default it is `openrouter-control-policies.json` in the current directory; set a different location with `--policy-store <path>` or `SHIM_MODEL_POLICY_STORE_PATH`.
+
+```json
+{
+  "version": 1,
+  "models": {
+    "deepseek/example": {
+      "mode": "allowlist",
+      "providers": ["relace", "gmicloud"],
+      "provider_order": ["relace", "gmicloud"],
+      "allow_fallbacks": false
+    }
+  }
+}
+```
+
+`inherit` (or a missing model entry) uses the configured global `policy`; `allowlist` compiles to `provider.only`; `blocklist` compiles to `provider.ignore`; and `custom` accepts a validated OpenRouter provider policy. G3 will add the management API and G4 the visual editor, so manual editing is temporary. Do not place API keys, prompts, or responses in this file.
+
 ## Merge Modes
 
 ### merge (default)

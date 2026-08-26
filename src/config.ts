@@ -49,6 +49,7 @@ export interface ShimConfig {
 
   merge_mode: MergeMode;
   policy: ProviderPolicy;
+  model_policy_store_path: string;
 
   request_timeout_ms: number;
   max_body_bytes: number;
@@ -84,7 +85,7 @@ const ProviderThresholdSchema = z.union([
   }),
 ]);
 
-const ProviderPolicySchema = z.object({
+export const ProviderPolicySchema = z.object({
   order: z.array(z.string()).optional(),
   only: z.array(z.string()).optional(),
   ignore: z.array(z.string()).optional(),
@@ -119,6 +120,7 @@ const ShimConfigSchema = z.object({
 
   merge_mode: z.enum(["merge", "override", "strict"]).default("merge"),
   policy: ProviderPolicySchema.default({}),
+  model_policy_store_path: z.string().default(resolve(process.cwd(), "openrouter-control-policies.json")),
 
   request_timeout_ms: z.number().default(600000),
   max_body_bytes: z.number().default(50 * 1024 * 1024),
@@ -215,6 +217,7 @@ export interface CliOptions {
   preferredMinThroughput?: string;
   preferredMaxLatency?: string;
   maxPrice?: string;
+  policyStore?: string;
   [key: string]: unknown;
 }
 
@@ -238,6 +241,7 @@ export function loadConfig(cliOpts: CliOptions = {}): ShimConfig {
     upstream_api_key: process.env.OPENROUTER_API_KEY,
     local_api_key: process.env.SHIM_LOCAL_API_KEY ?? cliOpts.localApiKey,
     merge_mode: process.env.SHIM_MERGE_MODE as MergeMode | undefined,
+    model_policy_store_path: process.env.SHIM_MODEL_POLICY_STORE_PATH,
     log_level: process.env.SHIM_LOG_LEVEL as "silent" | "error" | "info" | "debug" | undefined,
   };
 
@@ -318,6 +322,7 @@ export function loadConfig(cliOpts: CliOptions = {}): ShimConfig {
     ...(envConfig.upstream_api_key && { upstream_api_key: envConfig.upstream_api_key }),
     ...(envConfig.local_api_key && { local_api_key: envConfig.local_api_key }),
     ...(envConfig.merge_mode && { merge_mode: envConfig.merge_mode }),
+    ...(envConfig.model_policy_store_path && { model_policy_store_path: envConfig.model_policy_store_path }),
     ...(envConfig.log_level && { log_level: envConfig.log_level }),
     // CLI overrides
     ...(cliOpts.host && { host: cliOpts.host }),
@@ -326,6 +331,7 @@ export function loadConfig(cliOpts: CliOptions = {}): ShimConfig {
     ...(cliOpts.upstreamKey && { upstream_api_key: cliOpts.upstreamKey }),
     ...(cliOpts.localApiKey && { local_api_key: cliOpts.localApiKey }),
     ...(cliOpts.mergeMode && { merge_mode: cliOpts.mergeMode }),
+    ...(cliOpts.policyStore && { model_policy_store_path: resolve(cliOpts.policyStore) }),
     ...(cliOpts.logLevel && { log_level: cliOpts.logLevel }),
     ...(cliOpts.logBody !== undefined && { log_body: cliOpts.logBody }),
     // Policy

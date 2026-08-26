@@ -1,8 +1,9 @@
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { readJsonBody, writeJson, writeError, pipeFetchResponse, getInboundAuth } from "./util/http.js";
-import { applyProviderPolicy } from "./policy/providerPolicy.js";
+import { applyResolvedProviderPolicy } from "./policy/resolver.js";
 import { validateLocalAuth, validateMethod } from "./policy/validation.js";
+import { JsonPolicyStore } from "./storage/policies.js";
 import { makeLogger } from "./util/log.js";
 import { redactBody } from "./util/redact.js";
 import { getVersion } from "./util/version.js";
@@ -77,8 +78,23 @@ function getUpstreamAuth(req: IncomingMessage, cfg: ShimConfig): string | undefi
   return cfg.upstream_api_key ? `Bearer ${cfg.upstream_api_key}` : undefined;
 }
 
+export function safeResponseBodyForLogging(body: string, redact: boolean): string {
+  if (!redact) return body.slice(0, 2000);
+  try {
+    return JSON.stringify(redactBody(JSON.parse(body))).slice(0, 2000);
+  } catch {
+    return "[non-JSON response body omitted because redact_body is enabled]";
+  }
+}
+
 export function startServer(cfg: ShimConfig): http.Server {
   const log = makeLogger(cfg);
+  const modelPolicies = new JsonPolicyStore(cfg.model_policy_store_path);
+  try {
+    modelPolicies.load();
+  } catch (err: any) {
+    log.error({ err: err?.message ?? String(err), path: cfg.model_policy_store_path }, "model policy store unavailable; using global policy only");
+  }
 
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
@@ -99,7 +115,7 @@ export function startServer(cfg: ShimConfig): http.Server {
 
       if (req.method === "GET" && url.pathname === "/config") {
         // Return sanitized config (never includes upstream_api_key)
-        const { upstream_api_key, ...safe } = cfg as any;
+        const { upstream_api_key, local_api_key, ...safe } = cfg as any;
         return writeJson(res, 200, safe);
       }
 
@@ -207,9 +223,14 @@ export function startServer(cfg: ShimConfig): http.Server {
           }
         }
 
-        // Apply provider policy
+        // Resolve global/model policy, then apply the configured incoming-request merge behavior.
         try {
-          body = applyProviderPolicy(body, cfg.policy, cfg.merge_mode, cfg._runtime.soft_enforce_only);
+          body = applyResolvedProviderPolicy(body, {
+            globalPolicy: cfg.policy,
+            modelPolicy: modelPolicies.get(body?.model),
+            mergeMode: cfg.merge_mode,
+            softEnforceOnly: cfg._runtime.soft_enforce_only,
+          });
         } catch (err: any) {
           if (err.code === "ERR_PROVIDER_CONFLICT") {
             return writeError(res, 422, err.message, err.code);
@@ -228,7 +249,7 @@ export function startServer(cfg: ShimConfig): http.Server {
       if (cfg.log_level === "debug") {
         log.debug({ 
           authLength: upstreamAuth?.length ?? 0, 
-          authPrefix: upstreamAuth?.slice(0, 30),
+          authScheme: upstreamAuth?.split(/\s+/, 1)[0] ?? "none",
           upstreamKeyLength: cfg.upstream_api_key?.length ?? 0,
         }, "auth header");
       }
@@ -262,11 +283,11 @@ export function startServer(cfg: ShimConfig): http.Server {
           const requestBody = req.method === "POST" ? JSON.stringify(body) : undefined;
           
           // Debug: log the actual request body for troubleshooting
-          if (cfg.log_level === "debug" && requestBody) {
+          if (cfg.log_level === "debug" && cfg.log_body && requestBody) {
             log.debug({ 
               url: upstream, 
               bodySize: requestBody.length,
-              bodyPreview: requestBody.slice(0, 1000),
+              bodyPreview: cfg.redact_body ? JSON.stringify(redactBody(body)).slice(0, 1000) : requestBody.slice(0, 1000),
             }, "upstream request body");
           }
           
@@ -298,7 +319,7 @@ export function startServer(cfg: ShimConfig): http.Server {
       const isStreaming = body?.stream === true;
       const hasTools = !!body?.tools?.length;
       
-      if (cfg.log_level === "debug" && (upstreamResp.status >= 400 || (!isStreaming && hasTools))) {
+      if (cfg.log_level === "debug" && cfg.log_body && (upstreamResp.status >= 400 || (!isStreaming && hasTools))) {
         try {
           responseBodyForLogging = await upstreamResp.clone().text();
         } catch {
@@ -321,7 +342,7 @@ export function startServer(cfg: ShimConfig): http.Server {
       
       // Log response details for debugging
       if (responseBodyForLogging) {
-        log.debug({ responseBody: responseBodyForLogging.slice(0, 2000) }, "upstream response");
+        log.debug({ responseBody: safeResponseBodyForLogging(responseBodyForLogging, cfg.redact_body) }, "upstream response");
       }
 
     } catch (err: any) {
