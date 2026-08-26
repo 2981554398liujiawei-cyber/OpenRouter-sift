@@ -12,11 +12,11 @@ const endpointSchema = z.object({
   max_completion_tokens: z.number().nullable().optional(),
   quantization: z.string().nullable().optional(),
   supported_parameters: z.array(z.string()).nullable().optional(),
-  latency_last_30m: nullableUnknown,
-  throughput_last_30m: nullableUnknown,
-  uptime_last_5m: nullableUnknown,
-  uptime_last_30m: nullableUnknown,
-  uptime_last_1d: nullableUnknown,
+  latency_last_30m: z.unknown().optional(),
+  throughput_last_30m: z.unknown().optional(),
+  uptime_last_5m: z.unknown().optional(),
+  uptime_last_30m: z.unknown().optional(),
+  uptime_last_1d: z.unknown().optional(),
   status: z.union([z.string(), z.number()]).nullable().optional(),
 }).passthrough();
 
@@ -31,17 +31,33 @@ export interface EndpointDto {
   tag: string | null;
   name: string | null;
   modelId: string | null;
+  /** OpenRouter's raw per-token pricing; do not round or convert units in storage. */
   pricing: unknown | null;
   contextLength: number | null;
   maxCompletionTokens: number | null;
   quantization: string | null;
   supportedParameters: string[] | null;
-  latencyLast30m: unknown | null;
-  throughputLast30m: unknown | null;
-  uptimeLast5m: unknown | null;
-  uptimeLast30m: unknown | null;
-  uptimeLast1d: unknown | null;
+  performance: {
+    latencyLast30m: PercentileMetric | null;
+    throughputLast30m: PercentileMetric | null;
+    uptimeLast5m: number | null;
+    uptimeLast30m: number | null;
+    uptimeLast1d: number | null;
+  };
   status: string | number | null;
+}
+
+export interface PercentileMetric { p50: number | null; p75: number | null; p90: number | null; p99: number | null; }
+
+function normalizePercentiles(value: unknown): PercentileMetric | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const metric = value as Record<string, unknown>;
+  const numberOrNull = (key: keyof PercentileMetric) => typeof metric[key] === "number" && Number.isFinite(metric[key]) ? metric[key] : null;
+  return { p50: numberOrNull("p50"), p75: numberOrNull("p75"), p90: numberOrNull("p90"), p99: numberOrNull("p99") };
+}
+
+function normalizeNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export interface ParsedEndpoints { endpoints: EndpointDto[]; raw: unknown; }
@@ -63,11 +79,13 @@ export function parseEndpointsResponse(raw: unknown): ParsedEndpoints {
       maxCompletionTokens: endpoint.max_completion_tokens ?? null,
       quantization: endpoint.quantization ?? null,
       supportedParameters: endpoint.supported_parameters ?? null,
-      latencyLast30m: endpoint.latency_last_30m,
-      throughputLast30m: endpoint.throughput_last_30m,
-      uptimeLast5m: endpoint.uptime_last_5m,
-      uptimeLast30m: endpoint.uptime_last_30m,
-      uptimeLast1d: endpoint.uptime_last_1d,
+      performance: {
+        latencyLast30m: normalizePercentiles(endpoint.latency_last_30m),
+        throughputLast30m: normalizePercentiles(endpoint.throughput_last_30m),
+        uptimeLast5m: normalizeNumber(endpoint.uptime_last_5m),
+        uptimeLast30m: normalizeNumber(endpoint.uptime_last_30m),
+        uptimeLast1d: normalizeNumber(endpoint.uptime_last_1d),
+      },
       status: endpoint.status ?? null,
     })),
     raw,

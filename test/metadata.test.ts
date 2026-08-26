@@ -7,7 +7,7 @@ import { OpenRouterClient, OpenRouterMetadataError } from "../src/openrouter/cli
 import { JsonMetadataStore } from "../src/storage/metadata";
 
 const modelResponse = { data: [{ id: "openai/gpt-test", canonical_slug: "gpt-test", name: "GPT Test", context_length: 128000, pricing: { prompt: "0.1" }, architecture: { modality: "text" }, supported_parameters: ["tools"], created: 1 }] };
-const endpointResponse = { data: { endpoints: [{ provider_name: "Provider Display", provider_slug: "provider-routing-id", tag: "fp8", pricing: { prompt: "0.1" }, latency_last_30m: { p50: 1 }, throughput_last_30m: { p50: 100 }, uptime_last_5m: 0.99, quantization: "fp8", status: "available" }] } };
+const endpointResponse = { data: { endpoints: [{ provider_name: "Provider Display", provider_slug: "provider-routing-id", tag: "fp8", pricing: { prompt: "0.1" }, latency_last_30m: { p50: 1, p75: 2, p90: 3, p99: 4 }, throughput_last_30m: { p50: 100, p75: 90, p90: 80, p99: 70 }, uptime_last_5m: 0.99, uptime_last_30m: 0.98, uptime_last_1d: 0.97, quantization: "fp8", status: "available" }] } };
 
 function catalogWith(fetchImpl: typeof fetch, ttlMs = 300_000) {
   const directory = mkdtempSync(join(tmpdir(), "openrouter-metadata-"));
@@ -78,7 +78,7 @@ describe("OpenRouter metadata catalog", () => {
     try {
       const result = await catalog.getModelEndpoints("openai/gpt test");
       expect(fetchImpl.mock.calls[0][0]).toContain("/models/openai/gpt%20test/endpoints");
-      expect(result.data[0]).toMatchObject({ providerName: "Provider Display", providerSlug: "provider-routing-id", providerRoutingId: "fp8", tag: "fp8", latencyLast30m: { p50: 1 } });
+      expect(result.data[0]).toMatchObject({ providerName: "Provider Display", providerSlug: "provider-routing-id", providerRoutingId: "fp8", tag: "fp8", performance: { latencyLast30m: { p50: 1, p75: 2, p90: 3, p99: 4 }, throughputLast30m: { p50: 100, p75: 90, p90: 80, p99: 70 }, uptimeLast5m: 0.99, uptimeLast30m: 0.98, uptimeLast1d: 0.97 } });
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
@@ -87,7 +87,7 @@ describe("OpenRouter metadata catalog", () => {
     const { catalog, store, directory } = catalogWith(fetchImpl as typeof fetch);
     try {
       await expect(catalog.getModelEndpoints("bad-id")).rejects.toMatchObject({ code: "invalid_response" });
-      await expect(catalog.getModelEndpoints("openai/minimal")).resolves.toMatchObject({ data: [{ providerName: "Only Name", providerSlug: null, latencyLast30m: null }] });
+      await expect(catalog.getModelEndpoints("openai/minimal")).resolves.toMatchObject({ data: [{ providerName: "Only Name", providerSlug: null, performance: { latencyLast30m: null, throughputLast30m: null, uptimeLast5m: null, uptimeLast30m: null, uptimeLast1d: null } }] });
       store.setEndpoints("openai/not-found", { fetchedAt: "2020-01-01T00:00:00.000Z", value: [], raw: {} });
       (fetchImpl as any).mockImplementation(async () => new Response("missing", { status: 404 }));
       await expect(catalog.getModelEndpoints("openai/not-found", true)).resolves.toMatchObject({ state: "stale", data: [] });
@@ -113,6 +113,22 @@ describe("OpenRouter metadata catalog", () => {
       const path = join(directory, "metadata.json");
       writeFileSync(path, JSON.stringify({ version: 1, models: { fetchedAt: "not-a-date", value: [], raw: {} }, endpoints: {} }));
       expect(() => new JsonMetadataStore(path).load()).toThrow("Invalid models metadata cache entry");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("normalizes partial or malformed metrics without dropping the endpoint", async () => {
+    const response = { data: { endpoints: [{ provider_name: "Provider", tag: "provider", latency_last_30m: { p50: 1, p75: "bad", p90: 3 }, throughput_last_30m: { p50: "bad" }, uptime_last_5m: "bad", uptime_last_30m: 99, uptime_last_1d: null, quantization: null }] } };
+    const { catalog, directory } = catalogWith(vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })) as typeof fetch);
+    try {
+      await expect(catalog.getModelEndpoints("openai/metrics")).resolves.toMatchObject({ data: [{ providerRoutingId: "provider", quantization: null, performance: { latencyLast30m: { p50: 1, p75: null, p90: 3, p99: null }, throughputLast30m: { p50: null, p75: null, p90: null, p99: null }, uptimeLast5m: null, uptimeLast30m: 99, uptimeLast1d: null } }] });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("treats scalar, array, and empty metric values as unavailable", async () => {
+    const response = { data: { endpoints: [{ provider_name: "Provider", tag: "provider", latency_last_30m: 3, throughput_last_30m: [], uptime_last_5m: Infinity }] } };
+    const { catalog, directory } = catalogWith(vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })) as typeof fetch);
+    try {
+      await expect(catalog.getModelEndpoints("openai/odd-metrics")).resolves.toMatchObject({ data: [{ performance: { latencyLast30m: null, throughputLast30m: null, uptimeLast5m: null } }] });
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });

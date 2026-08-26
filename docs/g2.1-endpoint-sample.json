@@ -1,0 +1,34 @@
+{
+  "source": "https://openrouter.ai/api/v1/models/deepseek/deepseek-chat/endpoints",
+  "fetchedAt": "2026-08-26",
+  "redaction": "Public endpoint metadata only; no Authorization header, API key, prompt, or response body was recorded.",
+  "data": {
+    "id": "deepseek/deepseek-chat",
+    "endpoints": [
+      {
+        "provider_name": "StreamLake",
+        "tag": "streamlake",
+        "pricing": { "prompt": "0.0000002574", "completion": "0.0000010287", "discount": 0.1 },
+        "latency_last_30m": null,
+        "throughput_last_30m": null,
+        "uptime_last_5m": 99.70436067997043,
+        "uptime_last_30m": 99.77653631284916,
+        "uptime_last_1d": 99.56556703554133,
+        "quantization": "unknown",
+        "status": 0
+      },
+      {
+        "provider_name": "DeepInfra",
+        "tag": "deepinfra/fp4",
+        "pricing": { "prompt": "0.00000032", "completion": "0.00000089", "discount": 0 },
+        "latency_last_30m": null,
+        "throughput_last_30m": null,
+        "uptime_last_5m": 99.45511901347864,
+        "uptime_last_30m": 99.32812869647503,
+        "uptime_last_1d": 96.10890563410491,
+        "quantization": "fp4",
+        "status": 0
+      }
+    ]
+  }
+}
