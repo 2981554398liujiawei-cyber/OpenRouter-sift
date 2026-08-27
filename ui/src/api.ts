@@ -1,4 +1,4 @@
-import type { Endpoint, ModelSummary, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
+import type { AccessKey, AccessKeySecret, DesiredModel, Endpoint, ModelSummary, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
 
 type ApiError = { error?: { message?: string } };
 
@@ -34,4 +34,12 @@ export const api = {
   },
   request: (id: string) => request<RequestRecord>(`/requests/${encodeURIComponent(id)}`),
   clearRequests: () => request<unknown>("/requests", { method: "DELETE" }),
+  desiredModels: () => request<{ items: DesiredModel[] } | DesiredModel[]>("/desired-models"),
+  addDesiredModel: (id: string) => request<DesiredModel>(`/desired-models/${encodeURIComponent(id)}`, { method: "POST" }),
+  removeDesiredModel: (id: string) => request<unknown>(`/desired-models/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  accessKeys: () => request<{ items: AccessKey[] } | AccessKey[]>("/access-keys"),
+  accessKey: (id: string) => request<AccessKey>(`/access-keys/${encodeURIComponent(id)}`),
+  createAccessKey: (body: { name: string; allowedModels: string[] }) => request<AccessKeySecret>("/access-keys", { method: "POST", body: JSON.stringify(body) }),
+  updateAccessKey: (id: string, body: { name?: string; allowedModels?: string[]; enabled?: boolean }) => request<AccessKey>(`/access-keys/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteAccessKey: (id: string) => request<unknown>(`/access-keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };

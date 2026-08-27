@@ -47,6 +47,29 @@ export interface Settings {
   requestLogLimit: number;
 }
 
+export interface DesiredModel {
+  modelId: string;
+  enabled: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  assignedApiCount?: number;
+  assignedApis?: number | string[];
+}
+
+export interface AccessKey {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  keyLast4: string;
+  enabled: boolean;
+  allowedModels: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  lastUsedAt: string | null;
+}
+
+export interface AccessKeySecret extends AccessKey { secret: string }
+
 export type RequestProtocol = "anthropic_messages" | "chat_completions" | "responses" | string;
 export type EnrichmentStatus = "pending" | "success" | "failed" | "unavailable" | string;
 
@@ -54,6 +77,8 @@ export interface RequestListItem {
   id: string;
   startedAt: string;
   protocol: RequestProtocol;
+  accessKeyId: string | null;
+  accessKeyName: string | null;
   model: string | null;
   provider: string | null;
   status: number | string | null;

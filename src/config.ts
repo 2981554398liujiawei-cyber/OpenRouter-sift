@@ -53,6 +53,8 @@ export interface ShimConfig {
   metadata_cache_path: string;
   settings_store_path: string;
   request_log_store_path: string;
+  desired_model_store_path: string;
+  access_key_store_path: string;
 
   request_timeout_ms: number;
   max_body_bytes: number;
@@ -127,6 +129,8 @@ const ShimConfigSchema = z.object({
   metadata_cache_path: z.string().default(resolve(process.cwd(), "openrouter-control-metadata.json")),
   settings_store_path: z.string().default(resolve(process.cwd(), "openrouter-control-settings.json")),
   request_log_store_path: z.string().default(resolve(process.cwd(), "openrouter-control-requests.json")),
+  desired_model_store_path: z.string().default(resolve(process.cwd(), "openrouter-control-desired-models.json")),
+  access_key_store_path: z.string().default(resolve(process.cwd(), "openrouter-control-access-keys.json")),
 
   request_timeout_ms: z.number().default(600000),
   max_body_bytes: z.number().default(50 * 1024 * 1024),
@@ -227,6 +231,8 @@ export interface CliOptions {
   metadataCache?: string;
   settingsStore?: string;
   requestLogStore?: string;
+  desiredModelStore?: string;
+  accessKeyStore?: string;
   [key: string]: unknown;
 }
 
@@ -254,6 +260,8 @@ export function loadConfig(cliOpts: CliOptions = {}): ShimConfig {
     metadata_cache_path: process.env.SHIM_METADATA_CACHE_PATH,
     settings_store_path: process.env.SHIM_SETTINGS_STORE_PATH,
     request_log_store_path: process.env.SHIM_REQUEST_LOG_STORE_PATH,
+    desired_model_store_path: process.env.SHIM_DESIRED_MODEL_STORE_PATH,
+    access_key_store_path: process.env.SHIM_ACCESS_KEY_STORE_PATH,
     log_level: process.env.SHIM_LOG_LEVEL as "silent" | "error" | "info" | "debug" | undefined,
   };
 
@@ -338,6 +346,8 @@ export function loadConfig(cliOpts: CliOptions = {}): ShimConfig {
     ...(envConfig.metadata_cache_path && { metadata_cache_path: envConfig.metadata_cache_path }),
     ...(envConfig.settings_store_path && { settings_store_path: envConfig.settings_store_path }),
     ...(envConfig.request_log_store_path && { request_log_store_path: envConfig.request_log_store_path }),
+    ...(envConfig.desired_model_store_path && { desired_model_store_path: envConfig.desired_model_store_path }),
+    ...(envConfig.access_key_store_path && { access_key_store_path: envConfig.access_key_store_path }),
     ...(envConfig.log_level && { log_level: envConfig.log_level }),
     // CLI overrides
     ...(cliOpts.host && { host: cliOpts.host }),
@@ -350,6 +360,8 @@ export function loadConfig(cliOpts: CliOptions = {}): ShimConfig {
     ...(cliOpts.metadataCache && { metadata_cache_path: resolve(cliOpts.metadataCache) }),
     ...(cliOpts.settingsStore && { settings_store_path: resolve(cliOpts.settingsStore) }),
     ...(cliOpts.requestLogStore && { request_log_store_path: resolve(cliOpts.requestLogStore) }),
+    ...(cliOpts.desiredModelStore && { desired_model_store_path: resolve(cliOpts.desiredModelStore) }),
+    ...(cliOpts.accessKeyStore && { access_key_store_path: resolve(cliOpts.accessKeyStore) }),
     ...(cliOpts.logLevel && { log_level: cliOpts.logLevel }),
     ...(cliOpts.logBody !== undefined && { log_body: cliOpts.logBody }),
     // Policy

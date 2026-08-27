@@ -1,0 +1,73 @@
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { accessKeyLast4, accessKeyPrefix, hashAccessKey, verifyAccessKey } from "../src/access/crypto";
+import { JsonDesiredModelStore } from "../src/access/desiredModelStore";
+import { JsonAccessKeyStore } from "../src/access/accessKeyStore";
+
+describe("G6 access stores", () => {
+  it("persists desired models and removes them cleanly", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
+    try {
+      const models = new JsonDesiredModelStore(join(dir, "desired.json"));
+      models.add("deepseek/deepseek-v4-flash");
+      expect(models.has("deepseek/deepseek-v4-flash")).toBe(true);
+      const reloaded = new JsonDesiredModelStore(join(dir, "desired.json"));
+      reloaded.load();
+      expect(reloaded.list()).toHaveLength(1);
+      expect(reloaded.remove("deepseek/deepseek-v4-flash")).toBe(true);
+      expect(reloaded.list()).toEqual([]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("stores only a digest and returns the secret once", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
+    try {
+      const path = join(dir, "keys.json");
+      const store = new JsonAccessKeyStore(path);
+      const created = store.create("Codex", ["deepseek/deepseek-v4-flash"]);
+      expect(created.secret).toMatch(/^sift_sk_[A-Za-z0-9_-]{40,}$/);
+      expect(store.get(created.record.id)).not.toHaveProperty("secret");
+      const disk = readFileSync(path, "utf8");
+      expect(disk).not.toContain(created.secret);
+      expect(store.findBySecret(created.secret)?.id).toBe(created.record.id);
+      const reloaded = new JsonAccessKeyStore(path); reloaded.load();
+      expect(reloaded.findBySecret(created.secret)?.name).toBe("Codex");
+      expect(reloaded.list()[0]).not.toHaveProperty("secret");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("uses constant-time-compatible digest verification and supports updates/removal", () => {
+    const secret = "sift_sk_example_secret_12345678901234567890";
+    expect(verifyAccessKey(secret, hashAccessKey(secret))).toBe(true);
+    expect(verifyAccessKey(`${secret}x`, hashAccessKey(secret))).toBe(false);
+    expect(accessKeyPrefix(secret)).toBe("sift_sk_example_");
+    expect(accessKeyLast4(secret)).toBe("7890");
+
+    const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
+    try {
+      const store = new JsonAccessKeyStore(join(dir, "keys.json"));
+      const first = store.create("A", ["a", "b"]);
+      const second = store.create("B", ["b"]);
+      store.update(first.record.id, { enabled: false, allowedModels: ["a", "b", "a"] });
+      expect(store.get(first.record.id)?.enabled).toBe(false);
+      expect(store.removeModelFromAll("b")).toBe(2);
+      expect(store.get(first.record.id)?.allowedModels).toEqual(["a"]);
+      expect(store.get(second.record.id)?.allowedModels).toEqual([]);
+      expect(store.delete(second.record.id)).toBe(true);
+      expect(store.findBySecret(first.secret)?.id).toBe(first.record.id);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("rejects malformed names and model identifiers", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
+    try {
+      const store = new JsonAccessKeyStore(join(dir, "keys.json"));
+      expect(() => store.create("", [])).toThrow("Invalid access key name");
+      expect(() => store.create("ok", [" "])).toThrow("Invalid allowed model");
+      const models = new JsonDesiredModelStore(join(dir, "desired.json"));
+      expect(() => models.add(" ")).toThrow("Invalid model ID");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

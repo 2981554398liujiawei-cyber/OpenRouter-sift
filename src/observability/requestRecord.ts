@@ -8,6 +8,8 @@ export interface RequestRecord {
   startedAt: string;
   completedAt: string | null;
   protocol: RequestProtocol;
+  accessKeyId: string | null;
+  accessKeyName: string | null;
   requestedModel: string | null;
   forwardedModel: string | null;
   streamed: boolean | null;
@@ -42,6 +44,8 @@ export function newRequestRecord(id: string, protocol: RequestProtocol): Request
     startedAt: new Date().toISOString(),
     completedAt: null,
     protocol,
+    accessKeyId: null,
+    accessKeyName: null,
     requestedModel: null,
     forwardedModel: null,
     streamed: null,

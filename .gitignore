@@ -7,5 +7,7 @@ dist/
 *.tsbuildinfo
 coverage/
 openrouter-control-requests.json
+openrouter-control-desired-models.json
+openrouter-control-access-keys.json
 .vscode/
 .idea/

@@ -19,6 +19,8 @@ import { fileURLToPath } from "node:url";
 import { JsonRequestLogStore } from "./observability/requestStore.js";
 import { RequestTracker } from "./observability/requestTracker.js";
 import type { RequestProtocol } from "./observability/requestRecord.js";
+import { JsonDesiredModelStore } from "./access/desiredModelStore.js";
+import { JsonAccessKeyStore, type AccessKey } from "./access/accessKeyStore.js";
 
 const OPENROUTER_BASE_V1 = "https://openrouter.ai/api/v1";
 // In the bundled CLI, the UI lives beside `dist/server`, not beside the caller's cwd.
@@ -96,6 +98,20 @@ function protocolForPath(pathname: string): RequestProtocol | null {
   if (pathname === "/v1/chat/completions") return "chat_completions";
   if (pathname === "/v1/responses") return "responses";
   return null;
+}
+
+function inboundBearerToken(req: IncomingMessage): string | null {
+  const auth = getInboundAuth(req);
+  return auth?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
+}
+
+function accessKeyForApi(key: AccessKey): Omit<AccessKey, "keyHash"> {
+  const { keyHash: _keyHash, ...safe } = key;
+  return safe;
+}
+
+function isManagedKeyCandidate(req: IncomingMessage): boolean {
+  return inboundBearerToken(req)?.startsWith("sift_sk_") === true;
 }
 
 export function safeResponseBodyForLogging(body: string, redact: boolean): string {
@@ -201,6 +217,10 @@ export function startServer(cfg: ShimConfig): http.Server {
   const requestLogs = new JsonRequestLogStore(cfg.request_log_store_path, controlSettings.requestLogLimit ?? 1000);
   try { requestLogs.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.request_log_store_path }, "request history unavailable; continuing without stored history"); }
   const requestTracker = new RequestTracker(requestLogs, log, cfg.upstream_api_key ? new OpenRouterClient({ apiKey: cfg.upstream_api_key }) : undefined);
+  const desiredModels = new JsonDesiredModelStore(cfg.desired_model_store_path);
+  const accessKeys = new JsonAccessKeyStore(cfg.access_key_store_path);
+  try { desiredModels.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.desired_model_store_path }, "desired model store unavailable; using an empty desired model set"); }
+  try { accessKeys.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.access_key_store_path }, "access key store unavailable; managed access keys are unavailable"); }
 
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
@@ -214,6 +234,8 @@ export function startServer(cfg: ShimConfig): http.Server {
         requestTracker.complete(observationId, { proxyDurationMs: Date.now() - started, ...patch });
       }
     };
+    const isDataPlane = url.pathname.startsWith("/v1/");
+    let managedAccessKey: AccessKey | null = null;
 
     try {
       // Convenience endpoints
@@ -250,13 +272,38 @@ export function startServer(cfg: ShimConfig): http.Server {
         return;
       }
 
-      // Apply optional local authentication to both control-plane and proxy routes.
-      if (cfg.local_api_key) {
+      // A Local Access Key is an inference credential, never a control-plane
+      // credential. Enforce this even when legacy control authentication is off.
+      if (!isDataPlane && isManagedKeyCandidate(req)) {
+        return writeError(res, 401, "Managed Access Keys are valid only for /v1/*", "MANAGED_KEY_CONTROL_PLANE_FORBIDDEN");
+      }
+
+      // Control-plane auth remains the legacy local key. A managed Access Key is
+      // valid only for inference and must never unlock /api or /ui.
+      if (cfg.local_api_key && (!isDataPlane || !isManagedKeyCandidate(req))) {
         const authError = validateLocalAuth(req, cfg.local_api_key);
         if (authError) {
           finishObservation({ status: authError.status, error: { code: authError.code, message: authError.message } });
           return writeError(res, authError.status, authError.message, authError.code);
         }
+      }
+
+      if (isDataPlane && isManagedKeyCandidate(req)) {
+        const token = inboundBearerToken(req)!;
+        const key = accessKeys.findBySecret(token);
+        if (!key) {
+          finishObservation({ status: 401, error: { code: "INVALID_ACCESS_KEY", message: "Invalid Local Access Key" } });
+          return writeError(res, 401, "Invalid Local Access Key", "INVALID_ACCESS_KEY");
+        }
+        if (!key.enabled) {
+          finishObservation({ status: 401, error: { code: "ACCESS_KEY_DISABLED", message: "Local Access Key is disabled" } });
+          return writeError(res, 401, "Local Access Key is disabled", "ACCESS_KEY_DISABLED");
+        }
+        managedAccessKey = key;
+        if (observationId) requestTracker.update(observationId, { accessKeyId: key.id, accessKeyName: key.name });
+        queueMicrotask(() => {
+          try { accessKeys.touchLastUsed(key.id); } catch (err) { log.error({ err: safeObservationError(err).message }, "access key usage update failed"); }
+        });
       }
 
       // The control UI is a local, separately built asset bundle. Keep it outside
@@ -292,6 +339,58 @@ export function startServer(cfg: ShimConfig): http.Server {
             return writeJson(res, 200, { items, total: items.length, cache: { fetchedAt: snapshot.fetchedAt, stale: snapshot.state !== "fresh" } });
           }
           if (url.pathname === "/api/models/refresh" && req.method === "POST") return writeJson(res, 200, await metadataCatalog.syncModels(true));
+          const desiredModelMatch = url.pathname.match(/^\/api\/desired-models\/([^/]+)$/);
+          if (url.pathname === "/api/desired-models" && req.method === "GET") {
+            const assignedCounts = new Map<string, number>();
+            for (const key of accessKeys.list()) for (const modelId of key.allowedModels) assignedCounts.set(modelId, (assignedCounts.get(modelId) ?? 0) + 1);
+            return writeJson(res, 200, { items: desiredModels.list().map((model) => ({ ...model, assignedApiCount: assignedCounts.get(model.modelId) ?? 0 })) });
+          }
+          if (desiredModelMatch && req.method === "POST") {
+            const modelId = decodeModelId(desiredModelMatch[1]);
+            if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            try { return writeJson(res, 201, desiredModels.add(modelId)); } catch (err: any) { return writeError(res, 400, err?.message ?? "Invalid model ID", "INVALID_MODEL_ID"); }
+          }
+          if (desiredModelMatch && req.method === "DELETE") {
+            const modelId = decodeModelId(desiredModelMatch[1]);
+            if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            // Remove stale assignments before deletion; enforcement also intersects
+            // with Desired Models so a partial persistence failure still fails closed.
+            const removedFromKeys = accessKeys.removeModelFromAll(modelId);
+            return writeJson(res, 200, { modelId, deleted: desiredModels.remove(modelId), removedFromKeys });
+          }
+          const accessKeyMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)$/);
+          const validateAllowedModels = (models: unknown): string[] | null => {
+            if (!Array.isArray(models) || !models.every((model) => typeof model === "string")) return null;
+            const unique = [...new Set(models)];
+            return unique.every((model) => desiredModels.has(model)) ? unique : null;
+          };
+          if (url.pathname === "/api/access-keys" && req.method === "GET") return writeJson(res, 200, { items: accessKeys.list().map(accessKeyForApi) });
+          if (url.pathname === "/api/access-keys" && req.method === "POST") {
+            try {
+              const input = await readJsonBody(req, cfg.max_body_bytes) as { name?: unknown; allowedModels?: unknown };
+              if (typeof input.name !== "string") return writeError(res, 400, "name is required", "INVALID_ACCESS_KEY");
+              const allowedModels = validateAllowedModels(input.allowedModels);
+              if (!allowedModels) return writeError(res, 422, "Every allowed model must be in Desired Models", "MODEL_NOT_DESIRED");
+              const created = accessKeys.create(input.name, allowedModels);
+              return writeJson(res, 201, { ...accessKeyForApi(created.record), secret: created.secret });
+            } catch (err: any) { return writeError(res, 400, err?.message ?? "Invalid access key", "INVALID_ACCESS_KEY"); }
+          }
+          if (accessKeyMatch && req.method === "GET") {
+            const key = accessKeys.get(accessKeyMatch[1]);
+            return key ? writeJson(res, 200, accessKeyForApi(key)) : writeError(res, 404, "Access key not found", "ACCESS_KEY_NOT_FOUND");
+          }
+          if (accessKeyMatch && req.method === "PUT") {
+            try {
+              const input = await readJsonBody(req, cfg.max_body_bytes) as { name?: unknown; allowedModels?: unknown; enabled?: unknown };
+              if (input.name !== undefined && typeof input.name !== "string") return writeError(res, 400, "Invalid name", "INVALID_ACCESS_KEY");
+              if (input.enabled !== undefined && typeof input.enabled !== "boolean") return writeError(res, 400, "Invalid enabled flag", "INVALID_ACCESS_KEY");
+              const allowedModels = input.allowedModels === undefined ? undefined : validateAllowedModels(input.allowedModels);
+              if (input.allowedModels !== undefined && !allowedModels) return writeError(res, 422, "Every allowed model must be in Desired Models", "MODEL_NOT_DESIRED");
+              const key = accessKeys.update(accessKeyMatch[1], { ...(input.name !== undefined ? { name: input.name } : {}), ...(allowedModels !== undefined ? { allowedModels } : {}), ...(input.enabled !== undefined ? { enabled: input.enabled } : {}) });
+              return writeJson(res, 200, accessKeyForApi(key));
+            } catch (err: any) { return writeError(res, err?.message === "Access key not found" ? 404 : 400, err?.message ?? "Invalid access key", err?.message === "Access key not found" ? "ACCESS_KEY_NOT_FOUND" : "INVALID_ACCESS_KEY"); }
+          }
+          if (accessKeyMatch && req.method === "DELETE") return writeJson(res, 200, { id: accessKeyMatch[1], deleted: accessKeys.delete(accessKeyMatch[1]) });
           if ((endpointMatch || endpointRefreshMatch) && req.method === (endpointMatch ? "GET" : "POST")) {
             const modelId = decodeModelId((endpointMatch ?? endpointRefreshMatch)![1]);
             if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
@@ -346,7 +445,7 @@ export function startServer(cfg: ShimConfig): http.Server {
             const protocolFilter = url.searchParams.get("protocol") ?? undefined;
             if (protocolFilter && protocolFilter !== "anthropic_messages" && protocolFilter !== "chat_completions" && protocolFilter !== "responses") return writeError(res, 400, "Invalid protocol", "INVALID_REQUEST_QUERY");
             const result = requestLogs.list({ limit, model: url.searchParams.get("model") ?? undefined, provider: url.searchParams.get("provider") ?? undefined, status, protocol: protocolFilter });
-            return writeJson(res, 200, { items: result.items.map((record) => ({ id: record.id, startedAt: record.startedAt, protocol: record.protocol, model: record.requestedModel ?? record.forwardedModel, provider: record.actualProviderName, status: record.status, durationMs: record.proxyDurationMs, promptTokens: record.promptTokens, completionTokens: record.completionTokens, costUsd: record.costUsd, enrichmentStatus: record.enrichmentStatus })), total: result.total });
+            return writeJson(res, 200, { items: result.items.map((record) => ({ id: record.id, startedAt: record.startedAt, protocol: record.protocol, accessKeyId: record.accessKeyId, accessKeyName: record.accessKeyName, model: record.requestedModel ?? record.forwardedModel, provider: record.actualProviderName, status: record.status, durationMs: record.proxyDurationMs, promptTokens: record.promptTokens, completionTokens: record.completionTokens, costUsd: record.costUsd, enrichmentStatus: record.enrichmentStatus })), total: result.total });
           }
           const requestDetailMatch = url.pathname.match(/^\/api\/requests\/([^/]+)$/);
           if (requestDetailMatch && req.method === "GET") {
@@ -393,7 +492,7 @@ export function startServer(cfg: ShimConfig): http.Server {
               return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit() });
             } catch { return writeError(res, 400, "Invalid settings", "INVALID_SETTINGS"); }
           }
-          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || policyMatch || requestDetailMatch;
+          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/desired-models" || url.pathname === "/api/access-keys" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || desiredModelMatch || accessKeyMatch || policyMatch || requestDetailMatch;
           return writeError(res, knownRoute ? 405 : 404, knownRoute ? "Method not allowed" : "Management API endpoint not found", knownRoute ? "ERR_METHOD_NOT_ALLOWED" : "API_NOT_FOUND");
         } catch (err) {
           if (err instanceof OpenRouterMetadataError) return metadataError(err);
@@ -415,8 +514,20 @@ export function startServer(cfg: ShimConfig): http.Server {
         return writeError(res, methodError.status, methodError.message, methodError.code);
       }
 
+      // Managed keys see only the locally selected models assigned to that key.
+      // This is deliberately local: it never exposes the whole OpenRouter catalog.
+      if (url.pathname === "/v1/models" && managedAccessKey) {
+        const snapshot = metadataCatalog.getModelsSnapshot();
+        const catalogById = new Map(snapshot.data.map((model) => [model.id, model]));
+        const data = managedAccessKey.allowedModels.filter((modelId) => desiredModels.has(modelId)).map((modelId) => {
+          const model = catalogById.get(modelId);
+          return { id: modelId, object: "model", ...(model?.created !== null && model?.created !== undefined ? { created: model.created } : {}), owned_by: "openrouter" };
+        });
+        return writeJson(res, 200, { object: "list", data });
+      }
+
       // Get upstream auth
-      const upstreamAuth = getUpstreamAuth(req, cfg);
+      const upstreamAuth = managedAccessKey ? (cfg.upstream_api_key ? `Bearer ${cfg.upstream_api_key}` : undefined) : getUpstreamAuth(req, cfg);
       if (!upstreamAuth) {
         finishObservation({ status: 401, error: { code: "ERR_MISSING_AUTH", message: "Missing upstream authentication" } });
         return writeError(res, 401, "Missing upstream authentication", "ERR_MISSING_AUTH");
@@ -471,6 +582,16 @@ export function startServer(cfg: ShimConfig): http.Server {
         }
 
         requestTracker.update(observationId ?? "", { forwardedModel: typeof body?.model === "string" ? body.model : null });
+
+        // Authorize the actual forwarded model, not the client alias. This keeps
+        // Anthropic remapping useful without allowing it to bypass model grants.
+        if (managedAccessKey) {
+          const forwardedModel = typeof body?.model === "string" ? body.model : null;
+          if (!forwardedModel || !desiredModels.has(forwardedModel) || !managedAccessKey.allowedModels.includes(forwardedModel)) {
+            finishObservation({ status: 403, error: { code: "MODEL_NOT_ALLOWED", message: "Model is not allowed for this Local Access Key" } });
+            return writeError(res, 403, "Model is not allowed for this Local Access Key", "MODEL_NOT_ALLOWED");
+          }
+        }
 
         // Truncate metadata.user_id if it's too long (OpenRouter has 128 char limit)
         if (body?.metadata?.user_id && typeof body.metadata.user_id === "string") {

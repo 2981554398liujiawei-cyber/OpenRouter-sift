@@ -338,6 +338,14 @@ When a persistent `OPENROUTER_API_KEY` is configured and OpenRouter provides `X-
 
 Request history is JSON metadata with a default retention of 1000 records. Change its location with `--request-log-store <path>` or `SHIM_REQUEST_LOG_STORE_PATH`; adjust the retention (100–10000) in Settings. `GET /api/requests`, `GET /api/requests/:id`, and `DELETE /api/requests` are local-only management endpoints.
 
+### Managed Local Access Keys and Desired Models (G6)
+
+The control UI now separates the persistent **Upstream OpenRouter API Key** (configured outside the browser) from **Local Access Keys** (`sift_sk_...`) for clients. Add models to Desired Models first, then issue each Local Access Key only the selected subset. A managed key is valid exclusively on `/v1/*`; it cannot access `/api/*` or `/ui/*`.
+
+Managed `/v1/models` returns only `Desired Models ∩ allowedModels`. The same rule is enforced after any Anthropic model remap for Messages, Chat Completions, and Responses calls, so client aliases cannot bypass an allowed-model assignment. Removing a Desired Model removes it from managed keys and immediately makes it unavailable.
+
+Local Access Key plaintext is returned only by `POST /api/access-keys`; disk stores a SHA-256 digest, safe prefix, and last four characters. Default JSON paths are `openrouter-control-desired-models.json` and `openrouter-control-access-keys.json`, configurable with `--desired-model-store` / `SHIM_DESIRED_MODEL_STORE_PATH` and `--access-key-store` / `SHIM_ACCESS_KEY_STORE_PATH`.
+
 ## Merge Modes
 
 ### merge (default)

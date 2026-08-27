@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import type { Endpoint, ModelSummary, PolicyMode, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
+import type { AccessKey, AccessKeySecret, DesiredModel, Endpoint, ModelSummary, PolicyMode, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
 
-type Page = "models" | "policies" | "settings" | "requests";
+type Page = "models" | "desired" | "keys" | "policies" | "settings" | "requests";
 
 const emptyPolicy: ProviderPolicy = { mode: "inherit", providers: [], providerOrder: [], allowFallbacks: true };
 
@@ -36,6 +36,7 @@ function candidateFrom(policy: ProviderPolicy): ProviderPolicy {
 export function App() {
   const [page, setPage] = useState<Page>("models");
   const [models, setModels] = useState<ModelSummary[]>([]);
+  const [desiredModels, setDesiredModels] = useState<DesiredModel[]>([]);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState<{ proxy: { running: boolean }; openrouter: { configured: boolean } } | null>(null);
@@ -46,8 +47,10 @@ export function App() {
     try {
       setError(null);
       const [nextModels, nextStatus] = await Promise.all([api.models(nextQuery), api.status()]);
+      const nextDesired = typeof api.desiredModels === "function" ? await api.desiredModels().catch(() => ({ items: [] })) : { items: [] };
       setModels(nextModels.items);
       setStatus(nextStatus);
+      setDesiredModels(Array.isArray(nextDesired) ? nextDesired : Array.isArray(nextDesired?.items) ? nextDesired.items : []);
     } catch (err) { setError((err as Error).message); }
   };
 
@@ -68,7 +71,7 @@ export function App() {
     <header className="topbar">
       <button className="brand" onClick={() => { setSelectedId(null); setPage("models"); }}>OpenRouter <strong>Control</strong></button>
       <nav aria-label="Primary navigation">
-        {(["models", "policies", "requests", "settings"] as Page[]).map((item) => <button key={item} className={page === item && !selectedId ? "nav-active" : ""} onClick={() => { setSelectedId(null); setPage(item); }}>{item}</button>)}
+        {(["models", "desired", "keys", "policies", "requests", "settings"] as Page[]).map((item) => <button key={item} className={page === item && !selectedId ? "nav-active" : ""} onClick={() => { setSelectedId(null); setPage(item); }}>{item === "keys" ? "API Keys" : item === "desired" ? "Desired Models" : item}</button>)}
       </nav>
       <div className="status-group" aria-label="Service status">
         <span className={status?.proxy.running ? "status good" : "status"}>Proxy {status?.proxy.running ? "Running" : "Unknown"}</span>
@@ -76,18 +79,47 @@ export function App() {
       </div>
     </header>
     {(notice || error) && <div className={error ? "message error" : "message"}>{error ?? notice}<button aria-label="Dismiss message" onClick={() => { setError(null); setNotice(null); }}>×</button></div>}
-    {selectedId ? <ModelDetail modelId={selectedId} onBack={() => setSelectedId(null)} onSaved={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "models" ? <ModelsPage models={models} query={query} setQuery={setQuery} loadModels={loadModels} refreshModels={refreshModels} onOpen={openModel} /> : page === "policies" ? <PoliciesPage onOpen={openModel} setNotice={setNotice} setError={setError} /> : page === "settings" ? <SettingsPage setNotice={setNotice} setError={setError} /> : <RequestsPage setNotice={setNotice} setError={setError} />}
+    {selectedId ? <ModelDetail modelId={selectedId} onBack={() => setSelectedId(null)} onSaved={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "models" ? <ModelsPage models={models} desired={desiredModels} query={query} setQuery={setQuery} loadModels={loadModels} refreshModels={refreshModels} onOpen={openModel} onDesiredChange={() => void loadModels()} setError={setError} /> : page === "desired" ? <DesiredModelsPage models={models} desired={desiredModels} onChanged={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "keys" ? <AccessKeysPage desired={desiredModels} setNotice={setNotice} setError={setError} /> : page === "policies" ? <PoliciesPage onOpen={openModel} setNotice={setNotice} setError={setError} /> : page === "settings" ? <SettingsPage setNotice={setNotice} setError={setError} /> : <RequestsPage setNotice={setNotice} setError={setError} />}
   </main>;
 }
 
-function ModelsPage({ models, query, setQuery, loadModels, refreshModels, onOpen }: { models: ModelSummary[]; query: string; setQuery: (value: string) => void; loadModels: (query?: string) => Promise<void>; refreshModels: () => Promise<void>; onOpen: (id: string) => void }) {
-  return <section className="page"><div className="page-heading"><div><p className="eyebrow">Catalog</p><h1>Models</h1><p>Choose a model, inspect its current endpoints, and control its provider policy.</p></div><button className="button secondary" onClick={() => void refreshModels()}>Refresh models</button></div>
+function ModelsPage({ models, desired, query, setQuery, loadModels, refreshModels, onOpen, onDesiredChange, setError }: { models: ModelSummary[]; desired: DesiredModel[]; query: string; setQuery: (value: string) => void; loadModels: (query?: string) => Promise<void>; refreshModels: () => Promise<void>; onOpen: (id: string) => void; onDesiredChange: () => void; setError: (value: string) => void }) {
+  const desiredIds = new Set(desired.map((item) => item.modelId));
+  const toggleDesired = async (id: string) => { try { if (desiredIds.has(id)) await api.removeDesiredModel(id); else await api.addDesiredModel(id); onDesiredChange(); } catch (err) { setError((err as Error).message); } };
+  return <section className="page"><div className="page-heading"><div><p className="eyebrow">Catalog</p><h1>All Models</h1><p>Choose a model for your local Desired Models pool, then inspect its endpoints and policy.</p></div><button className="button secondary" onClick={() => void refreshModels()}>Refresh models</button></div>
     <form className="search" onSubmit={(event) => { event.preventDefault(); void loadModels(query); }}><input aria-label="Search models" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search model ID, name, or vendor" /><button className="button" type="submit">Search</button></form>
-    <div className="model-list">{models.length === 0 ? <EmptyCatalog /> : models.map((model) => <button className="model-row" key={model.id} onClick={() => onOpen(model.id)}><span><strong>{model.name || model.id}</strong><small>{model.id}</small></span><span className="model-meta"><span>{model.contextLength ? `${model.contextLength.toLocaleString()} context` : "Context unavailable"}</span><span className={`policy-tag ${model.policySummary}`}>{policyLabel(model.policySummary)}</span></span></button>)}</div>
+    <div className="model-list">{models.length === 0 ? <EmptyCatalog /> : models.map((model) => <div className="model-row" key={model.id}><button className="model-link" onClick={() => onOpen(model.id)}><strong>{model.name || model.id}</strong><small>{model.id}</small></button><span className="model-meta"><span>{model.contextLength ? `${model.contextLength.toLocaleString()} context` : "Context unavailable"}</span><span className={`policy-tag ${model.policySummary}`}>{policyLabel(model.policySummary)}</span><button className={desiredIds.has(model.id) ? "desired-button selected" : "desired-button"} onClick={() => void toggleDesired(model.id)}>{desiredIds.has(model.id) ? "✓ Desired" : "Add to Desired"}</button></span></div>)}</div>
   </section>;
 }
 
 function EmptyCatalog() { return <div className="empty"><h2>No cached models yet</h2><p>Configure an OpenRouter key outside the UI, then refresh the catalog.</p></div>; }
+
+function DesiredModelsPage({ models, desired, onChanged, setNotice, setError }: { models: ModelSummary[]; desired: DesiredModel[]; onChanged: () => void; setNotice: (value: string) => void; setError: (value: string) => void }) {
+  const names = new Map(models.map((model) => [model.id, model.name || model.id]));
+  const remove = async (id: string) => { try { await api.removeDesiredModel(id); onChanged(); setNotice("Model removed from Desired Models."); } catch (err) { setError((err as Error).message); } };
+  return <section className="page"><div className="page-heading"><div><p className="eyebrow">Access boundary</p><h1>Desired Models</h1><p>Only models in this pool can be assigned to managed Local Access Keys.</p></div></div><div className="panel table-wrap"><table><thead><tr><th>Model</th><th>Enabled</th><th>Assigned APIs</th><th /></tr></thead><tbody>{desired.length === 0 ? <tr><td colSpan={4}>No Desired Models yet. Add one from All Models.</td></tr> : desired.map((item) => <tr key={item.modelId}><td><strong>{names.get(item.modelId) ?? item.modelId}</strong><small>{item.modelId}</small></td><td>{item.enabled === false ? "Disabled" : "Enabled"}</td><td>{typeof item.assignedApiCount === "number" ? item.assignedApiCount : Array.isArray(item.assignedApis) ? item.assignedApis.length : typeof item.assignedApis === "number" ? item.assignedApis : 0}</td><td className="table-actions"><button onClick={() => void remove(item.modelId)}>Remove</button></td></tr>)}</tbody></table></div></section>;
+}
+
+function AccessKeysPage({ desired, setNotice, setError }: { desired: DesiredModel[]; setNotice: (value: string) => void; setError: (value: string) => void }) {
+  const [keys, setKeys] = useState<AccessKey[]>([]); const [editing, setEditing] = useState<AccessKey | null>(null); const [showForm, setShowForm] = useState(false); const [secret, setSecret] = useState<AccessKeySecret | null>(null);
+  const load = async () => { try { const result = await api.accessKeys(); setKeys(Array.isArray(result) ? result : result.items); } catch (err) { setError((err as Error).message); } };
+  useEffect(() => { void load(); }, []);
+  const save = async (name: string, allowedModels: string[], enabled: boolean) => { try { if (editing) await api.updateAccessKey(editing.id, { name, allowedModels, enabled }); else setSecret(await api.createAccessKey({ name, allowedModels })); setShowForm(false); setEditing(null); await load(); setNotice(editing ? "Local Access Key updated." : "Local Access Key created."); } catch (err) { setError((err as Error).message); } };
+  const toggle = async (item: AccessKey) => { try { await api.updateAccessKey(item.id, { enabled: !item.enabled }); await load(); } catch (err) { setError((err as Error).message); } };
+  const remove = async (item: AccessKey) => { if (!window.confirm(`Delete Local Access Key “${item.name}”?`)) return; try { await api.deleteAccessKey(item.id); await load(); setNotice("Local Access Key deleted."); } catch (err) { setError((err as Error).message); } };
+  return <section className="page"><div className="page-heading"><div><p className="eyebrow">Managed gateway</p><h1>API Keys</h1><p>These are Local Access Keys for <code>/v1/*</code>. They are separate from the Upstream OpenRouter API Key.</p></div><button className="button" onClick={() => { setEditing(null); setShowForm(true); }}>Create</button></div><div className="panel table-wrap"><table><thead><tr><th>Name</th><th>Key</th><th>Status</th><th>Models</th><th>Last used</th><th /></tr></thead><tbody>{keys.length === 0 ? <tr><td colSpan={6}>No Local Access Keys yet.</td></tr> : keys.map((item) => <tr key={item.id}><td><strong>{item.name}</strong></td><td><code>{item.keyPrefix}••••{item.keyLast4}</code></td><td>{item.enabled ? "Enabled" : "Disabled"}</td><td>{item.allowedModels.length} {item.allowedModels.length === 1 ? "model" : "models"}</td><td>{item.lastUsedAt ? new Date(item.lastUsedAt).toLocaleString() : "Never"}</td><td className="table-actions"><button onClick={() => { setEditing(item); setShowForm(true); }}>Edit</button><button onClick={() => void toggle(item)}>{item.enabled ? "Disable" : "Enable"}</button><button onClick={() => void remove(item)}>Delete</button></td></tr>)}</tbody></table></div>{showForm && <AccessKeyForm initial={editing} desired={desired} onCancel={() => { setShowForm(false); setEditing(null); }} onSave={save} />}{secret && <SecretModal value={secret} onClose={() => setSecret(null)} />}</section>;
+}
+
+function AccessKeyForm({ initial, desired, onCancel, onSave }: { initial: AccessKey | null; desired: DesiredModel[]; onCancel: () => void; onSave: (name: string, models: string[], enabled: boolean) => void }) {
+  const [name, setName] = useState(initial?.name ?? ""); const [selected, setSelected] = useState(initial?.allowedModels ?? []);
+  const toggle = (id: string) => setSelected(selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id]);
+  return <div className="modal-backdrop"><section className="modal panel" role="dialog" aria-label={initial ? "Edit Local Access Key" : "Create Local Access Key"}><div className="panel-title"><div><h2>{initial ? "Edit Local Access Key" : "Create Local Access Key"}</h2><p>Allowed Models must be selected from Desired Models.</p></div><button className="text-button" onClick={onCancel}>Close</button></div><label className="modal-field">Name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Codex" /></label><fieldset className="model-checks"><legend>Allowed Models</legend>{desired.length === 0 ? <p className="muted">Add Desired Models before assigning this key.</p> : desired.map((item) => <label key={item.modelId}><input type="checkbox" checked={selected.includes(item.modelId)} onChange={() => toggle(item.modelId)} />{item.modelId}</label>)}</fieldset><div className="actions"><button className="button secondary" onClick={onCancel}>Cancel</button><button className="button" disabled={!name.trim() || selected.length === 0} onClick={() => onSave(name.trim(), selected, initial?.enabled ?? true)}>{initial ? "Save" : "Create key"}</button></div></section></div>;
+}
+
+function SecretModal({ value, onClose }: { value: AccessKeySecret; onClose: () => void }) {
+  const [copied, setCopied] = useState(false); const copy = async () => { await navigator.clipboard?.writeText(value.secret); setCopied(true); };
+  return <div className="modal-backdrop"><section className="modal panel secret-modal" role="dialog" aria-label="Your Access Key"><h2>Your Access Key</h2><p>Copy this now. It will not be shown again.</p><code className="secret-value">{value.secret}</code><div className="actions"><button className="button secondary" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button><button className="button" onClick={onClose}>Done</button></div></section></div>;
+}
 
 function ModelDetail({ modelId, onBack, onSaved, setNotice, setError }: { modelId: string; onBack: () => void; onSaved: () => void; setNotice: (value: string) => void; setError: (value: string) => void }) {
   const [model, setModel] = useState<ModelSummary | null>(null);
