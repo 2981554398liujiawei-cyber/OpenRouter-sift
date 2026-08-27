@@ -6,6 +6,7 @@ export interface ControlSettings {
   mergeMode?: MergeMode;
   globalPolicy?: ProviderPolicy;
   metadataTtlMs?: number;
+  requestLogLimit?: number;
 }
 
 interface SettingsFile { version: 1; settings: ControlSettings; }

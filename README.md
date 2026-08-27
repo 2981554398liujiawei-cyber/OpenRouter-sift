@@ -330,6 +330,14 @@ The UI supports `inherit`, allowlist, and blocklist policies. Allowlist ordering
 
 Settings persist merge mode, global policy, and metadata cache TTL. The configured API-key state is display-only: runtime key updates are deliberately rejected, so use environment variables or startup options instead.
 
+### Request observability (G5)
+
+The Requests page at `/ui` records local request metadata only: protocol, requested and forwarded model, policy snapshot, status, duration, cancellation, and the OpenRouter generation ID. Prompts, responses, tool arguments, and authorization values are never persisted or exposed through the management API.
+
+When a persistent `OPENROUTER_API_KEY` is configured and OpenRouter provides `X-Generation-Id`, the proxy schedules a separate, bounded `GET /api/v1/generation?id=...` lookup after the client response completes. This enriches the record with the confirmed provider name, usage, actual cost, and OpenRouter timing. The proxy never injects `X-OpenRouter-Metadata`, never calls `/generation/content`, and never waits for enrichment before completing a request.
+
+Request history is JSON metadata with a default retention of 1000 records. Change its location with `--request-log-store <path>` or `SHIM_REQUEST_LOG_STORE_PATH`; adjust the retention (100–10000) in Settings. `GET /api/requests`, `GET /api/requests/:id`, and `DELETE /api/requests` are local-only management endpoints.
+
 ## Merge Modes
 
 ### merge (default)

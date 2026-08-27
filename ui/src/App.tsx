@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import type { Endpoint, ModelSummary, PolicyMode, ProviderPolicy, Settings } from "./types";
+import type { Endpoint, ModelSummary, PolicyMode, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
 
 type Page = "models" | "policies" | "settings" | "requests";
 
@@ -76,7 +76,7 @@ export function App() {
       </div>
     </header>
     {(notice || error) && <div className={error ? "message error" : "message"}>{error ?? notice}<button aria-label="Dismiss message" onClick={() => { setError(null); setNotice(null); }}>×</button></div>}
-    {selectedId ? <ModelDetail modelId={selectedId} onBack={() => setSelectedId(null)} onSaved={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "models" ? <ModelsPage models={models} query={query} setQuery={setQuery} loadModels={loadModels} refreshModels={refreshModels} onOpen={openModel} /> : page === "policies" ? <PoliciesPage onOpen={openModel} setNotice={setNotice} setError={setError} /> : page === "settings" ? <SettingsPage setNotice={setNotice} setError={setError} /> : <section className="empty-page"><p className="eyebrow">G5</p><h1>Request history arrives next.</h1><p>Provider control is ready; request metadata stays out of this phase.</p></section>}
+    {selectedId ? <ModelDetail modelId={selectedId} onBack={() => setSelectedId(null)} onSaved={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "models" ? <ModelsPage models={models} query={query} setQuery={setQuery} loadModels={loadModels} refreshModels={refreshModels} onOpen={openModel} /> : page === "policies" ? <PoliciesPage onOpen={openModel} setNotice={setNotice} setError={setError} /> : page === "settings" ? <SettingsPage setNotice={setNotice} setError={setError} /> : <RequestsPage setNotice={setNotice} setError={setError} />}
   </main>;
 }
 
@@ -157,7 +157,61 @@ function SettingsPage({ setNotice, setError }: { setNotice: (value: string) => v
   const [settings, setSettings] = useState<Settings | null>(null);
   const [globalPolicyText, setGlobalPolicyText] = useState("{}");
   useEffect(() => { void api.settings().then((value) => { setSettings(value); setGlobalPolicyText(JSON.stringify(value.globalPolicy, null, 2)); }).catch((err: Error) => setError(err.message)); }, []);
-  const save = async () => { if (!settings) return; try { const globalPolicy = JSON.parse(globalPolicyText) as Record<string, unknown>; const saved = await api.saveSettings({ mergeMode: settings.mergeMode, metadataTtlMs: settings.metadataTtlMs, globalPolicy }); setSettings(saved); setGlobalPolicyText(JSON.stringify(saved.globalPolicy, null, 2)); setNotice("Settings saved."); } catch (err) { setError((err as Error).message || "Global policy must be valid JSON."); } };
+  const save = async () => { if (!settings) return; try { const globalPolicy = JSON.parse(globalPolicyText) as Record<string, unknown>; const saved = await api.saveSettings({ mergeMode: settings.mergeMode, metadataTtlMs: settings.metadataTtlMs, requestLogLimit: settings.requestLogLimit, globalPolicy }); setSettings(saved); setGlobalPolicyText(JSON.stringify(saved.globalPolicy, null, 2)); setNotice("Settings saved."); } catch (err) { setError((err as Error).message || "Global policy must be valid JSON."); } };
   if (!settings) return <section className="page">Loading settings…</section>;
-  return <section className="page settings"><div className="page-heading"><div><p className="eyebrow">Local control plane</p><h1>Settings</h1><p>Values here persist locally and apply to the same policy resolver as proxy traffic.</p></div></div><section className="panel"><h2>OpenRouter API key</h2><p>{settings.openRouterApiKeyConfigured ? `Configured externally (${settings.openRouterApiKeyMasked}).` : "Not configured. Set OPENROUTER_API_KEY or use the startup option."}</p><small>For safety, this UI does not accept or store API keys.</small></section><section className="panel form-grid"><label>Merge mode<select value={settings.mergeMode} onChange={(event) => setSettings({ ...settings, mergeMode: event.target.value as Settings["mergeMode"] })}><option value="merge">Merge</option><option value="override">Override</option><option value="strict">Strict</option></select></label><label>Metadata cache TTL (ms)<input type="number" min="1000" value={settings.metadataTtlMs} onChange={(event) => setSettings({ ...settings, metadataTtlMs: Number(event.target.value) })} /></label><label className="full">Global provider policy <textarea value={globalPolicyText} onChange={(event) => setGlobalPolicyText(event.target.value)} spellCheck="false" /></label><div className="full actions"><button className="button" onClick={() => void save()}>Save settings</button></div></section></section>;
+  return <section className="page settings"><div className="page-heading"><div><p className="eyebrow">Local control plane</p><h1>Settings</h1><p>Values here persist locally and apply to the same policy resolver as proxy traffic.</p></div></div><section className="panel"><h2>OpenRouter API key</h2><p>{settings.openRouterApiKeyConfigured ? `Configured externally (${settings.openRouterApiKeyMasked}).` : "Not configured. Set OPENROUTER_API_KEY or use the startup option."}</p><small>For safety, this UI does not accept or store API keys.</small></section><section className="panel form-grid"><label>Merge mode<select value={settings.mergeMode} onChange={(event) => setSettings({ ...settings, mergeMode: event.target.value as Settings["mergeMode"] })}><option value="merge">Merge</option><option value="override">Override</option><option value="strict">Strict</option></select></label><label>Metadata cache TTL (ms)<input type="number" min="1000" value={settings.metadataTtlMs} onChange={(event) => setSettings({ ...settings, metadataTtlMs: Number(event.target.value) })} /></label><label>Request history limit <input type="number" min="100" max="10000" value={settings.requestLogLimit ?? 1000} onChange={(event) => setSettings({ ...settings, requestLogLimit: Number(event.target.value) })} /><small>Request metadata retained locally (100–10,000 requests).</small></label><label className="full">Global provider policy <textarea value={globalPolicyText} onChange={(event) => setGlobalPolicyText(event.target.value)} spellCheck="false" /></label><div className="full actions"><button className="button" onClick={() => void save()}>Save settings</button></div></section><section className="panel privacy-note"><h2>Privacy</h2><p>Request logging stores metadata only. Prompt and response content are never persisted.</p></section></section>;
 }
+
+function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+}
+
+function formatTokens(input: number | null | undefined, output: number | null | undefined): string {
+  if (input === null || input === undefined || output === null || output === undefined) return "—";
+  const compact = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1).replace(/\.0$/, "")}K` : String(value);
+  return `${compact(input)} → ${compact(output)}`;
+}
+
+function formatCost(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (value === 0) return "$0";
+  if (Math.abs(value) < 0.000001) return "<$0.000001";
+  return `$${value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
+}
+
+function requestStatus(value: RequestListItem["status"], cancelled?: boolean | null): { label: string; className: string } {
+  if (cancelled) return { label: "Cancelled", className: "cancelled" };
+  const code = Number(value);
+  if (Number.isFinite(code) && code >= 200 && code < 400) return { label: `✓ ${code}`, className: "success" };
+  if (Number.isFinite(code)) return { label: `× ${code}`, className: "failure" };
+  return { label: display(value), className: "unknown" };
+}
+
+function protocolLabel(protocol: string): string { return ({ anthropic_messages: "Anthropic Messages", chat_completions: "Chat Completions", responses: "Responses" } as Record<string, string>)[protocol] ?? protocol; }
+
+function RequestsPage({ setNotice, setError }: { setNotice: (value: string) => void; setError: (value: string) => void }) {
+  const [items, setItems] = useState<RequestListItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [filters, setFilters] = useState({ model: "", provider: "", status: "", protocol: "" });
+  const [selected, setSelected] = useState<RequestRecord | null>(null);
+  const [loading, setLoading] = useState(false);
+  const load = async () => { try { setLoading(true); const result = await api.requests({ ...filters, limit: 100 }); setItems(result.items); setTotal(result.total); } catch (err) { setError((err as Error).message); } finally { setLoading(false); } };
+  useEffect(() => { void load(); }, [filters.model, filters.provider, filters.status, filters.protocol]);
+  useEffect(() => {
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, 3000);
+    return () => window.clearInterval(timer);
+  }, [filters.model, filters.provider, filters.status, filters.protocol]);
+  const clear = async () => { if (!window.confirm("Clear all local request metadata? Prompts and responses are never stored.")) return; try { await api.clearRequests(); setItems([]); setTotal(0); setSelected(null); setNotice("Request history cleared."); } catch (err) { setError((err as Error).message); } };
+  return <section className="page requests"><div className="page-heading"><div><p className="eyebrow">G5 · Observability</p><h1>Requests</h1><p>Metadata-only history. Prompts and responses are never persisted.</p></div><div className="request-actions"><button className="button secondary" onClick={() => void load()} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button><button className="button danger" onClick={() => void clear()}>Clear history</button></div></div><div className="request-filters"><input aria-label="Search model" placeholder="Search model" value={filters.model} onChange={(event) => setFilters({ ...filters, model: event.target.value })} /><input aria-label="Filter provider" placeholder="Provider" value={filters.provider} onChange={(event) => setFilters({ ...filters, provider: event.target.value })} /><select aria-label="Filter status" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">All statuses</option><option value="200">200 Success</option><option value="400">400 Error</option><option value="429">429 Error</option><option value="500">500 Error</option></select><select aria-label="Filter protocol" value={filters.protocol} onChange={(event) => setFilters({ ...filters, protocol: event.target.value })}><option value="">All protocols</option><option value="anthropic_messages">Anthropic Messages</option><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></div>{items.length === 0 ? <div className="empty"><h2>No requests yet</h2><p>Completed proxy calls will appear here. Refreshing every 3 seconds while visible.</p></div> : <div className="panel table-wrap"><table className="request-table"><thead><tr><th>Time</th><th>Model</th><th>Provider</th><th>Protocol</th><th>Status</th><th>Duration</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="clickable-row" tabIndex={0} onClick={() => void api.request(item.id).then(setSelected).catch((err: Error) => setError(err.message))} onKeyDown={(event) => { if (event.key === "Enter") void api.request(item.id).then(setSelected).catch((err: Error) => setError(err.message)); }}><td>{new Date(item.startedAt).toLocaleTimeString()}</td><td><strong>{item.model ?? "Unknown"}</strong></td><td>{item.enrichmentStatus === "pending" ? <span className="resolving">Resolving…</span> : item.provider ?? "Unknown"}</td><td>{protocolLabel(item.protocol)}</td><td><span className={`request-status ${requestStatus(item.status).className}`}>{requestStatus(item.status).label}</span></td><td>{formatDuration(item.durationMs)}</td><td>{formatTokens(item.promptTokens, item.completionTokens)}</td><td>{formatCost(item.costUsd)}</td></tr>)}</tbody></table><small className="request-count">Showing {items.length} of {total}</small></div>}{selected && <RequestDetail record={selected} onClose={() => setSelected(null)} />}</section>;
+}
+
+function RequestDetail({ record, onClose }: { record: RequestRecord; onClose: () => void }) {
+  const policy = record.effectiveProviderPolicy;
+  const errorText = record.error ? [record.error.code, record.error.message].filter(Boolean).join(": ") : "";
+  return <div className="drawer-backdrop" onClick={onClose}><aside className="drawer" role="dialog" aria-label="Request details" onClick={(event) => event.stopPropagation()}><div className="panel-title"><div><p className="eyebrow">Request</p><h2>{record.id}</h2></div><button className="text-button" onClick={onClose}>Close</button></div><dl className="detail-grid"><Detail label="Timestamp" value={new Date(record.startedAt).toLocaleString()} /><Detail label="Protocol" value={protocolLabel(record.protocol)} /><Detail label="Requested model" value={record.requestedModel ?? record.model} /><Detail label="Forwarded model" value={record.forwardedModel ?? "—"} /><Detail label="Actual provider" value={record.enrichmentStatus === "pending" ? "Resolving…" : record.actualProviderName ?? "Unknown"} /><Detail label="Status" value={requestStatus(record.status, record.clientCancelled).label} /><Detail label="Streaming" value={record.streamed === null ? "—" : record.streamed ? "Yes" : "No"} /><Detail label="Client cancelled" value={record.clientCancelled === null ? "—" : record.clientCancelled ? "Yes" : "No"} /><Detail label="Proxy duration" value={formatDuration(record.proxyDurationMs)} /><Detail label="OpenRouter latency" value={formatDuration(record.openRouterLatencyMs)} /><Detail label="Generation time" value={formatDuration(record.generationTimeMs)} /><Detail label="Prompt tokens" value={display(record.promptTokens)} /><Detail label="Completion tokens" value={display(record.completionTokens)} /><Detail label="Total tokens" value={display(record.totalTokens)} /><Detail label="Cost" value={formatCost(record.costUsd)} /><Detail label="Finish reason" value={display(record.finishReason)} /><Detail label="Generation ID" value={display(record.generationId)} /><Detail label="Enrichment" value={record.enrichmentStatus ?? "Unknown"} /></dl><section className="detail-section"><h3>Provider Policy Used</h3>{policy ? <pre>{JSON.stringify(policy, null, 2)}</pre> : <p>—</p>}</section>{errorText && <section className="detail-section error-copy"><h3>Error</h3><p>{errorText}</p></section>}<p className="privacy-inline">Request metadata only. Prompt and response content are never shown or stored.</p></aside></div>;
+}
+
+function Detail({ label, value }: { label: string; value: string }) { return <div><dt>{label}</dt><dd>{value}</dd></div>; }

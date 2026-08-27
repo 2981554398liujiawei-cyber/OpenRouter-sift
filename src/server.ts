@@ -16,6 +16,9 @@ import { JsonSettingsStore, type ControlSettings } from "./storage/settings.js";
 import { serveControlUi } from "./controlUi.js";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { JsonRequestLogStore } from "./observability/requestStore.js";
+import { RequestTracker } from "./observability/requestTracker.js";
+import type { RequestProtocol } from "./observability/requestRecord.js";
 
 const OPENROUTER_BASE_V1 = "https://openrouter.ai/api/v1";
 // In the bundled CLI, the UI lives beside `dist/server`, not beside the caller's cwd.
@@ -88,6 +91,13 @@ function getUpstreamAuth(req: IncomingMessage, cfg: ShimConfig): string | undefi
   return cfg.upstream_api_key ? `Bearer ${cfg.upstream_api_key}` : undefined;
 }
 
+function protocolForPath(pathname: string): RequestProtocol | null {
+  if (pathname === "/v1/messages") return "anthropic_messages";
+  if (pathname === "/v1/chat/completions") return "chat_completions";
+  if (pathname === "/v1/responses") return "responses";
+  return null;
+}
+
 export function safeResponseBodyForLogging(body: string, redact: boolean): string {
   if (!redact) return body.slice(0, 2000);
   try {
@@ -112,6 +122,11 @@ function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
 function maskedKey(key: string | undefined): string | null {
   if (!key) return null;
   return `••••${key.slice(-4)}`;
+}
+
+function safeObservationError(error: unknown, fallbackCode = "ERR_PROXY"): { code: string; message: string } {
+  const source = error instanceof Error ? error.message : String(error);
+  return { code: fallbackCode, message: source.replace(/(?:sk-or-|sk-ant-)[\w-]+/gi, "[redacted]").replace(/bearer\s+\S+/gi, "Bearer [redacted]").slice(0, 500) };
 }
 
 function policyForApi(modelPolicy: ModelPolicy | undefined): Record<string, unknown> {
@@ -172,20 +187,33 @@ export function startServer(cfg: ShimConfig): http.Server {
     log.error({ err: err?.message ?? String(err), path: cfg.metadata_cache_path }, "metadata cache unavailable; continuing without cached metadata");
   }
   const settingsStore = new JsonSettingsStore(cfg.settings_store_path);
-  let controlSettings: ControlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs() };
+  let controlSettings: ControlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: 1000 };
   try {
     const saved = settingsStore.load();
     if (saved.mergeMode) cfg.merge_mode = saved.mergeMode;
     if (saved.globalPolicy) cfg.policy = ProviderPolicySchema.parse(saved.globalPolicy);
     if (typeof saved.metadataTtlMs === "number" && Number.isInteger(saved.metadataTtlMs) && saved.metadataTtlMs >= 1_000) metadataCatalog.setTtlMs(saved.metadataTtlMs);
-    controlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs() };
+    const requestLogLimit = typeof saved.requestLogLimit === "number" && Number.isInteger(saved.requestLogLimit) && saved.requestLogLimit >= 100 && saved.requestLogLimit <= 10_000 ? saved.requestLogLimit : 1000;
+    controlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit };
   } catch (err: any) {
     log.error({ err: err?.message ?? String(err), path: cfg.settings_store_path }, "settings store unavailable; using configured defaults");
   }
+  const requestLogs = new JsonRequestLogStore(cfg.request_log_store_path, controlSettings.requestLogLimit ?? 1000);
+  try { requestLogs.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.request_log_store_path }, "request history unavailable; continuing without stored history"); }
+  const requestTracker = new RequestTracker(requestLogs, log, cfg.upstream_api_key ? new OpenRouterClient({ apiKey: cfg.upstream_api_key }) : undefined);
 
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
     const url = new URL(req.url ?? "/", `http://${cfg.host}:${cfg.port}`);
+    const protocol = protocolForPath(url.pathname);
+    const observationId = protocol ? requestTracker.begin(protocol) : null;
+    let observationFinished = false;
+    const finishObservation = (patch: Parameters<RequestTracker["complete"]>[1]) => {
+      if (observationId && !observationFinished) {
+        observationFinished = true;
+        requestTracker.complete(observationId, { proxyDurationMs: Date.now() - started, ...patch });
+      }
+    };
 
     try {
       // Convenience endpoints
@@ -225,7 +253,10 @@ export function startServer(cfg: ShimConfig): http.Server {
       // Apply optional local authentication to both control-plane and proxy routes.
       if (cfg.local_api_key) {
         const authError = validateLocalAuth(req, cfg.local_api_key);
-        if (authError) return writeError(res, authError.status, authError.message, authError.code);
+        if (authError) {
+          finishObservation({ status: authError.status, error: { code: authError.code, message: authError.message } });
+          return writeError(res, authError.status, authError.message, authError.code);
+        }
       }
 
       // The control UI is a local, separately built asset bundle. Keep it outside
@@ -305,8 +336,31 @@ export function startServer(cfg: ShimConfig): http.Server {
               return writeJson(res, 200, { modelId: preview.modelId ?? null, effectivePolicy, openRouterProviderPayload: effectivePolicy });
             } catch (err: any) { return writeError(res, 400, err?.message ?? "Invalid policy preview", "INVALID_POLICY"); }
           }
+          if (url.pathname === "/api/requests" && req.method === "GET") {
+            const limitValue = url.searchParams.get("limit");
+            const limit = limitValue === null ? 100 : Number(limitValue);
+            if (!Number.isInteger(limit) || limit < 1 || limit > 500) return writeError(res, 400, "limit must be an integer from 1 to 500", "INVALID_REQUEST_QUERY");
+            const statusValue = url.searchParams.get("status");
+            const status = statusValue === null ? undefined : Number(statusValue);
+            if (statusValue !== null && (!Number.isInteger(status) || status! < 100 || status! > 599)) return writeError(res, 400, "status must be an HTTP status code", "INVALID_REQUEST_QUERY");
+            const protocolFilter = url.searchParams.get("protocol") ?? undefined;
+            if (protocolFilter && protocolFilter !== "anthropic_messages" && protocolFilter !== "chat_completions" && protocolFilter !== "responses") return writeError(res, 400, "Invalid protocol", "INVALID_REQUEST_QUERY");
+            const result = requestLogs.list({ limit, model: url.searchParams.get("model") ?? undefined, provider: url.searchParams.get("provider") ?? undefined, status, protocol: protocolFilter });
+            return writeJson(res, 200, { items: result.items.map((record) => ({ id: record.id, startedAt: record.startedAt, protocol: record.protocol, model: record.requestedModel ?? record.forwardedModel, provider: record.actualProviderName, status: record.status, durationMs: record.proxyDurationMs, promptTokens: record.promptTokens, completionTokens: record.completionTokens, costUsd: record.costUsd, enrichmentStatus: record.enrichmentStatus })), total: result.total });
+          }
+          const requestDetailMatch = url.pathname.match(/^\/api\/requests\/([^/]+)$/);
+          if (requestDetailMatch && req.method === "GET") {
+            const record = requestLogs.get(requestDetailMatch[1]);
+            if (!record) return writeError(res, 404, "Request record not found", "REQUEST_NOT_FOUND");
+            return writeJson(res, 200, record);
+          }
+          if (url.pathname === "/api/requests" && req.method === "DELETE") {
+            const deleted = requestLogs.clear();
+            try { requestLogs.persist(); } catch (err: any) { log.error({ err: safeObservationError(err).message }, "request history clear persistence failed"); }
+            return writeJson(res, 200, { deleted });
+          }
           if (url.pathname === "/api/settings" && req.method === "GET") {
-            return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs() });
+            return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit() });
           }
           if (url.pathname === "/api/settings" && req.method === "PUT") {
             try {
@@ -315,6 +369,7 @@ export function startServer(cfg: ShimConfig): http.Server {
               let nextMergeMode = cfg.merge_mode;
               let nextGlobalPolicy = cfg.policy;
               let nextMetadataTtlMs = metadataCatalog.getTtlMs();
+              let nextRequestLogLimit = requestLogs.getLimit();
               if (update.mergeMode !== undefined) {
                 if (update.mergeMode !== "merge" && update.mergeMode !== "override" && update.mergeMode !== "strict") return writeError(res, 400, "Invalid merge mode", "INVALID_SETTINGS");
                 nextMergeMode = update.mergeMode;
@@ -324,16 +379,21 @@ export function startServer(cfg: ShimConfig): http.Server {
                 if (typeof update.metadataTtlMs !== "number" || !Number.isInteger(update.metadataTtlMs) || update.metadataTtlMs < 1_000) return writeError(res, 400, "metadataTtlMs must be an integer of at least 1000", "INVALID_SETTINGS");
                 nextMetadataTtlMs = update.metadataTtlMs;
               }
-              const nextSettings = { mergeMode: nextMergeMode, globalPolicy: nextGlobalPolicy, metadataTtlMs: nextMetadataTtlMs };
+              if (update.requestLogLimit !== undefined) {
+                if (typeof update.requestLogLimit !== "number" || !Number.isInteger(update.requestLogLimit) || update.requestLogLimit < 100 || update.requestLogLimit > 10_000) return writeError(res, 400, "requestLogLimit must be an integer from 100 to 10000", "INVALID_SETTINGS");
+                nextRequestLogLimit = update.requestLogLimit;
+              }
+              const nextSettings = { mergeMode: nextMergeMode, globalPolicy: nextGlobalPolicy, metadataTtlMs: nextMetadataTtlMs, requestLogLimit: nextRequestLogLimit };
               settingsStore.save(nextSettings);
               cfg.merge_mode = nextMergeMode;
               cfg.policy = nextGlobalPolicy;
               metadataCatalog.setTtlMs(nextMetadataTtlMs);
+              requestTracker.setLimit(nextRequestLogLimit);
               controlSettings = nextSettings;
-              return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs() });
+              return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit() });
             } catch { return writeError(res, 400, "Invalid settings", "INVALID_SETTINGS"); }
           }
-          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || endpointMatch || endpointRefreshMatch || modelDetailMatch || policyMatch;
+          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || policyMatch || requestDetailMatch;
           return writeError(res, knownRoute ? 405 : 404, knownRoute ? "Method not allowed" : "Management API endpoint not found", knownRoute ? "ERR_METHOD_NOT_ALLOWED" : "API_NOT_FOUND");
         } catch (err) {
           if (err instanceof OpenRouterMetadataError) return metadataError(err);
@@ -344,18 +404,21 @@ export function startServer(cfg: ShimConfig): http.Server {
       // Find upstream URL
       const upstream = upstreamUrlForPath(url.pathname, cfg);
       if (!upstream) {
+        finishObservation({ status: 404, error: { code: "ERR_NOT_FOUND", message: "Not found" } });
         return writeError(res, 404, "Not found");
       }
 
       // Method validation
       const methodError = validateMethod(req.method ?? "GET", url.pathname);
       if (methodError) {
+        finishObservation({ status: methodError.status, error: { code: methodError.code, message: methodError.message } });
         return writeError(res, methodError.status, methodError.message, methodError.code);
       }
 
       // Get upstream auth
       const upstreamAuth = getUpstreamAuth(req, cfg);
       if (!upstreamAuth) {
+        finishObservation({ status: 401, error: { code: "ERR_MISSING_AUTH", message: "Missing upstream authentication" } });
         return writeError(res, 401, "Missing upstream authentication", "ERR_MISSING_AUTH");
       }
 
@@ -366,8 +429,10 @@ export function startServer(cfg: ShimConfig): http.Server {
           body = await readJsonBody(req, cfg.max_body_bytes);
         } catch (err: any) {
           if (err.code === "ERR_BODY_TOO_LARGE") {
+            finishObservation({ status: 413, error: { code: "ERR_BODY_TOO_LARGE", message: err.message } });
             return writeError(res, 413, err.message, "ERR_BODY_TOO_LARGE");
           }
+          finishObservation({ status: 400, error: { code: "ERR_INVALID_BODY", message: err.message } });
           return writeError(res, 400, err.message, "ERR_INVALID_BODY");
         }
 
@@ -389,6 +454,9 @@ export function startServer(cfg: ShimConfig): http.Server {
           }, "request details");
         }
 
+        const requestedModel = typeof body?.model === "string" ? body.model : null;
+        requestTracker.update(observationId ?? "", { requestedModel, forwardedModel: requestedModel, streamed: body?.stream === true });
+
         // Remap Anthropic model names to user's preferred model
         // Claude Code sends internal model names (claude-haiku, etc.) for helper functions
         if (body?.model && isAnthropicModel(body.model)) {
@@ -401,6 +469,8 @@ export function startServer(cfg: ShimConfig): http.Server {
             }
           }
         }
+
+        requestTracker.update(observationId ?? "", { forwardedModel: typeof body?.model === "string" ? body.model : null });
 
         // Truncate metadata.user_id if it's too long (OpenRouter has 128 char limit)
         if (body?.metadata?.user_id && typeof body.metadata.user_id === "string") {
@@ -417,6 +487,8 @@ export function startServer(cfg: ShimConfig): http.Server {
 
         // Resolve global/model policy, then apply the configured incoming-request merge behavior.
         try {
+          const effectiveProviderPolicy = resolveProviderPolicy({ globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(body?.model), incomingPolicy: body?.provider, mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
+          requestTracker.update(observationId ?? "", { effectiveProviderPolicy: effectiveProviderPolicy ?? null });
           body = applyResolvedProviderPolicy(body, {
             globalPolicy: cfg.policy,
             modelPolicy: modelPolicies.get(body?.model),
@@ -425,6 +497,7 @@ export function startServer(cfg: ShimConfig): http.Server {
           });
         } catch (err: any) {
           if (err.code === "ERR_PROVIDER_CONFLICT") {
+            finishObservation({ status: 422, error: { code: err.code, message: err.message } });
             return writeError(res, 422, err.message, err.code);
           }
           throw err;
@@ -462,14 +535,16 @@ export function startServer(cfg: ShimConfig): http.Server {
       let upstreamResp: Response;
       let retries = 0;
       const upstreamAbort = new AbortController();
+      let abortReason: "client" | "timeout" | null = null;
       const cancelUpstreamForDisconnectedClient = () => {
         if (!res.writableEnded && !upstreamAbort.signal.aborted) {
+          abortReason = "client";
           upstreamAbort.abort(new Error("Client disconnected"));
         }
       };
       req.once("aborted", cancelUpstreamForDisconnectedClient);
       res.once("close", cancelUpstreamForDisconnectedClient);
-      const timeout = setTimeout(() => upstreamAbort.abort(new Error("Upstream request timed out")), cfg.request_timeout_ms);
+      const timeout = setTimeout(() => { abortReason = "timeout"; upstreamAbort.abort(new Error("Upstream request timed out")); }, cfg.request_timeout_ms);
       
       // Custom retry delays: 1, 2, 4, 8, 12, 18, 24, 32 seconds
       const retryDelays = [1000, 2000, 4000, 8000, 12000, 18000, 24000, 32000];
@@ -512,8 +587,12 @@ export function startServer(cfg: ShimConfig): http.Server {
           
           break; // Success or non-retryable error
           } catch (err: any) {
-            if (upstreamAbort.signal.aborted && res.destroyed) return;
+            if (upstreamAbort.signal.aborted && res.destroyed) {
+              finishObservation({ status: null, clientCancelled: true, error: { code: "ERR_CLIENT_CANCELLED", message: "Client disconnected" } });
+              return;
+            }
             log.error({ err: err.message, upstream }, "upstream request failed");
+            finishObservation({ status: 502, clientCancelled: abortReason === "client", error: safeObservationError(err, abortReason === "timeout" ? "ERR_UPSTREAM_TIMEOUT" : "ERR_UPSTREAM_FAILED") });
             return writeError(res, 502, `Upstream request failed: ${err.message}`, "ERR_UPSTREAM_FAILED");
           }
         }
@@ -534,8 +613,13 @@ export function startServer(cfg: ShimConfig): http.Server {
         }
       }
 
-      // Pipe response back to caller
-      await pipeFetchResponse(upstreamResp, res, upstreamAbort.signal);
+      const generationId = upstreamResp.headers.get("x-generation-id");
+      const cacheStatus = upstreamResp.headers.get("x-openrouter-cache-status");
+      const cacheAge = upstreamResp.headers.get("x-openrouter-cache-age");
+
+      // Pipe response back to caller without decoding, buffering, or changing any chunks.
+      const pipeResult = await pipeFetchResponse(upstreamResp, res, upstreamAbort.signal);
+      finishObservation({ status: upstreamResp.status, generationId, cacheStatus, cacheAge, clientCancelled: pipeResult.clientCancelled || abortReason === "client" });
 
       // Log request metadata (never log prompt content by default)
       const model = body?.model ?? body?.models?.[0] ?? "unknown";
@@ -560,6 +644,7 @@ export function startServer(cfg: ShimConfig): http.Server {
       if (!res.headersSent) {
         writeError(res, 500, msg, "ERR_INTERNAL");
       }
+      finishObservation({ status: res.headersSent ? null : 500, clientCancelled: res.destroyed, error: safeObservationError(err, "ERR_INTERNAL") });
       log.error({ ms, err: msg, path: url.pathname, headersSent: res.headersSent }, "error");
     }
   });

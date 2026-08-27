@@ -43,7 +43,9 @@ export function writeError(res: ServerResponse, status: number, message: string,
   });
 }
 
-export async function pipeFetchResponse(upstreamResp: Response, res: ServerResponse, signal?: AbortSignal): Promise<void> {
+export interface PipeResult { completed: boolean; clientCancelled: boolean; }
+
+export async function pipeFetchResponse(upstreamResp: Response, res: ServerResponse, signal?: AbortSignal): Promise<PipeResult> {
   // Pass through key headers only. Avoid forwarding content-length if streaming.
   const ct = upstreamResp.headers.get("content-type") ?? "application/json";
   const headers: Record<string, string> = { "content-type": ct };
@@ -63,21 +65,21 @@ export async function pipeFetchResponse(upstreamResp: Response, res: ServerRespo
 
   if (!upstreamResp.body) {
     res.end();
-    return;
+    return { completed: true, clientCancelled: false };
   }
 
   const reader = upstreamResp.body.getReader();
   let complete = false;
   try {
     while (true) {
-      if (res.destroyed || signal?.aborted) return;
+      if (res.destroyed || signal?.aborted) return { completed: false, clientCancelled: res.destroyed };
       const { value, done } = await reader.read();
       if (done) {
         complete = true;
         break;
       }
       if (value) {
-        if (res.destroyed || signal?.aborted) return;
+        if (res.destroyed || signal?.aborted) return { completed: false, clientCancelled: res.destroyed };
         // Write the chunk and handle backpressure
         const canContinue = res.write(value);
         if (!canContinue) {
@@ -109,6 +111,7 @@ export async function pipeFetchResponse(upstreamResp: Response, res: ServerRespo
     }
     if (!res.destroyed) res.end();
   }
+  return { completed: complete, clientCancelled: res.destroyed };
 }
 
 export function getInboundAuth(req: IncomingMessage): string | undefined {

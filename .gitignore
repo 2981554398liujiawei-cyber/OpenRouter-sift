@@ -6,5 +6,6 @@ dist/
 .env.local
 *.tsbuildinfo
 coverage/
+openrouter-control-requests.json
 .vscode/
 .idea/

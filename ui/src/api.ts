@@ -1,4 +1,4 @@
-import type { Endpoint, ModelSummary, ProviderPolicy, Settings } from "./types";
+import type { Endpoint, ModelSummary, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
 
 type ApiError = { error?: { message?: string } };
 
@@ -26,5 +26,12 @@ export const api = {
   deletePolicy: (id: string) => request<unknown>(`/policies/${encodeURIComponent(id)}`, { method: "DELETE" }),
   preview: (modelId: string, candidatePolicy: ProviderPolicy) => request<{ effectivePolicy: Record<string, unknown>; openRouterProviderPayload: Record<string, unknown> }>("/policies/preview", { method: "POST", body: JSON.stringify({ modelId, candidatePolicy }) }),
   settings: () => request<Settings>("/settings"),
-  saveSettings: (settings: Pick<Settings, "mergeMode" | "globalPolicy" | "metadataTtlMs">) => request<Settings>("/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  saveSettings: (settings: Pick<Settings, "mergeMode" | "globalPolicy" | "metadataTtlMs" | "requestLogLimit">) => request<Settings>("/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  requests: (filters: { limit?: number; model?: string; provider?: string; status?: string; protocol?: string } = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) if (value) params.set(key, String(value));
+    return request<{ items: RequestListItem[]; total: number }>(`/requests${params.toString() ? `?${params}` : ""}`);
+  },
+  request: (id: string) => request<RequestRecord>(`/requests/${encodeURIComponent(id)}`),
+  clearRequests: () => request<unknown>("/requests", { method: "DELETE" }),
 };

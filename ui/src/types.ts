@@ -44,4 +44,43 @@ export interface Settings {
   mergeMode: "merge" | "override" | "strict";
   globalPolicy: Record<string, unknown>;
   metadataTtlMs: number;
+  requestLogLimit: number;
+}
+
+export type RequestProtocol = "anthropic_messages" | "chat_completions" | "responses" | string;
+export type EnrichmentStatus = "pending" | "success" | "failed" | "unavailable" | string;
+
+export interface RequestListItem {
+  id: string;
+  startedAt: string;
+  protocol: RequestProtocol;
+  model: string | null;
+  provider: string | null;
+  status: number | string | null;
+  durationMs: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  costUsd: number | null;
+  enrichmentStatus: EnrichmentStatus | null;
+}
+
+export interface RequestRecord extends RequestListItem {
+  completedAt: string | null;
+  requestedModel: string | null;
+  forwardedModel: string | null;
+  streamed: boolean | null;
+  clientCancelled: boolean | null;
+  proxyDurationMs: number | null;
+  generationId: string | null;
+  effectiveProviderPolicy: Record<string, unknown> | null;
+  actualProviderName: string | null;
+  totalTokens: number | null;
+  openRouterLatencyMs: number | null;
+  generationTimeMs: number | null;
+  finishReason: string | null;
+  isByok: boolean | null;
+  router: string | null;
+  serviceTier: string | null;
+  error: { code: string | null; message: string | null } | null;
+  actualProviderRoutingId: string | null;
 }

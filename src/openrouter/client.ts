@@ -37,6 +37,11 @@ export class OpenRouterClient {
     return this.getJson(`/models/${encodeURIComponent(author)}/${encodeURIComponent(slug)}/endpoints`, signal);
   }
 
+  async getGeneration(generationId: string, signal?: AbortSignal): Promise<unknown> {
+    if (!generationId.trim()) throw new OpenRouterMetadataError("Generation ID is required", undefined, "invalid_response");
+    return this.getJson(`/generation?id=${encodeURIComponent(generationId)}`, signal);
+  }
+
   private async getJson(path: string, externalSignal?: AbortSignal): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
