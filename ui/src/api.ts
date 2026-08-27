@@ -1,4 +1,4 @@
-import type { AccessKey, AccessKeySecret, DesiredModel, Endpoint, ModelSummary, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
+import type { AccessKey, AccessKeySecret, DesiredModel, Endpoint, FilterPreview, ModelSummary, ProviderFilterConfig, ProviderFilterCondition, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
 
 type ApiError = { error?: { message?: string } };
 
@@ -37,6 +37,10 @@ export const api = {
   desiredModels: () => request<{ items: DesiredModel[] } | DesiredModel[]>("/desired-models"),
   addDesiredModel: (id: string) => request<DesiredModel>(`/desired-models/${encodeURIComponent(id)}`, { method: "POST" }),
   removeDesiredModel: (id: string) => request<unknown>(`/desired-models/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  desiredFilter: (id: string) => request<ProviderFilterConfig | { providerFilter: ProviderFilterConfig | null } | null>(`/desired-models/${encodeURIComponent(id)}/filter`),
+  saveDesiredFilter: (id: string, filter: ProviderFilterConfig) => request<ProviderFilterConfig>(`/desired-models/${encodeURIComponent(id)}/filter`, { method: "PUT", body: JSON.stringify(filter) }),
+  deleteDesiredFilter: (id: string) => request<unknown>(`/desired-models/${encodeURIComponent(id)}/filter`, { method: "DELETE" }),
+  previewDesiredFilter: (id: string, conditions: ProviderFilterCondition[]) => request<FilterPreview>(`/desired-models/${encodeURIComponent(id)}/filter/preview`, { method: "POST", body: JSON.stringify({ conditions }) }),
   accessKeys: () => request<{ items: AccessKey[] } | AccessKey[]>("/access-keys"),
   accessKey: (id: string) => request<AccessKey>(`/access-keys/${encodeURIComponent(id)}`),
   createAccessKey: (body: { name: string; allowedModels: string[] }) => request<AccessKeySecret>("/access-keys", { method: "POST", body: JSON.stringify(body) }),

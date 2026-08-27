@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { ProviderFilterConfig } from "../providerFilters/types.js";
 
 export interface DesiredModel {
   modelId: string;
   enabled: boolean;
+  providerFilter: ProviderFilterConfig | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -28,7 +30,7 @@ export class JsonDesiredModelStore {
         throw new Error("Invalid desired model entry");
       }
     }
-    this.models = structuredClone(parsed.models);
+    this.models = Object.fromEntries(Object.entries(parsed.models).map(([id, model]) => [id, { ...model, providerFilter: model.providerFilter ?? null }]));
   }
 
   get(modelId: string): DesiredModel | undefined { return this.models[modelId] ? structuredClone(this.models[modelId]) : undefined; }
@@ -39,7 +41,7 @@ export class JsonDesiredModelStore {
     if (!validModelId(modelId)) throw new Error("Invalid model ID");
     const now = new Date().toISOString();
     const existing = this.models[modelId];
-    const model = existing ? { ...existing, enabled: true, updatedAt: now } : { modelId, enabled: true, createdAt: now, updatedAt: now };
+    const model = existing ? { ...existing, enabled: true, updatedAt: now } : { modelId, enabled: true, providerFilter: null, createdAt: now, updatedAt: now };
     this.models[modelId] = model;
     this.persist();
     return structuredClone(model);
@@ -57,6 +59,15 @@ export class JsonDesiredModelStore {
     const existing = this.models[modelId];
     if (!existing) throw new Error("Desired model not found");
     const model = { ...existing, enabled, updatedAt: new Date().toISOString() };
+    this.models[modelId] = model;
+    this.persist();
+    return structuredClone(model);
+  }
+
+  setProviderFilter(modelId: string, providerFilter: ProviderFilterConfig | null): DesiredModel {
+    const existing = this.models[modelId];
+    if (!existing) throw new Error("Desired model not found");
+    const model = { ...existing, providerFilter, updatedAt: new Date().toISOString() };
     this.models[modelId] = model;
     this.persist();
     return structuredClone(model);

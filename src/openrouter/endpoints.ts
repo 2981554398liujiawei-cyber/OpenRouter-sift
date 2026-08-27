@@ -13,6 +13,7 @@ const endpointSchema = z.object({
   max_prompt_tokens: z.number().nullable().optional(),
   quantization: z.string().nullable().optional(),
   supported_parameters: z.array(z.string()).nullable().optional(),
+  supports_implicit_caching: z.boolean().nullable().optional(),
   latency_last_30m: z.unknown().optional(),
   throughput_last_30m: z.unknown().optional(),
   uptime_last_5m: z.unknown().optional(),
@@ -39,6 +40,7 @@ export interface EndpointDto {
   maxPromptTokens: number | null;
   quantization: string | null;
   supportedParameters: string[] | null;
+  supportsImplicitCaching: boolean | null;
   performance: {
     latencyLast30m: PercentileMetric | null;
     throughputLast30m: PercentileMetric | null;
@@ -72,7 +74,7 @@ export function parseEndpointsResponse(raw: unknown): ParsedEndpoints {
       providerName: endpoint.provider_name ?? null,
       providerSlug: endpoint.provider_slug ?? null,
       // `tag` is OpenRouter's documented provider/endpoint selector. Never derive it from display text.
-      providerRoutingId: endpoint.tag ?? endpoint.provider_slug ?? null,
+      providerRoutingId: endpoint.tag ?? null,
       tag: endpoint.tag ?? null,
       name: endpoint.name ?? null,
       modelId: endpoint.model_id ?? null,
@@ -82,6 +84,7 @@ export function parseEndpointsResponse(raw: unknown): ParsedEndpoints {
       maxPromptTokens: endpoint.max_prompt_tokens ?? null,
       quantization: endpoint.quantization ?? null,
       supportedParameters: endpoint.supported_parameters ?? null,
+      supportsImplicitCaching: endpoint.supports_implicit_caching ?? null,
       performance: {
         latencyLast30m: normalizePercentiles(endpoint.latency_last_30m),
         throughputLast30m: normalizePercentiles(endpoint.throughput_last_30m),

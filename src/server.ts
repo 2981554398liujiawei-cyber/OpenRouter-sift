@@ -21,6 +21,7 @@ import { RequestTracker } from "./observability/requestTracker.js";
 import type { RequestProtocol } from "./observability/requestRecord.js";
 import { JsonDesiredModelStore } from "./access/desiredModelStore.js";
 import { JsonAccessKeyStore, type AccessKey } from "./access/accessKeyStore.js";
+import { evaluateProviderEndpoints, type ProviderFilterConfig } from "./providerFilters/index.js";
 
 const OPENROUTER_BASE_V1 = "https://openrouter.ai/api/v1";
 // In the bundled CLI, the UI lives beside `dist/server`, not beside the caller's cwd.
@@ -340,6 +341,36 @@ export function startServer(cfg: ShimConfig): http.Server {
           }
           if (url.pathname === "/api/models/refresh" && req.method === "POST") return writeJson(res, 200, await metadataCatalog.syncModels(true));
           const desiredModelMatch = url.pathname.match(/^\/api\/desired-models\/([^/]+)$/);
+          const filterMatch = url.pathname.match(/^\/api\/desired-models\/([^/]+)\/filter$/);
+          const filterPreviewMatch = url.pathname.match(/^\/api\/desired-models\/([^/]+)\/filter\/preview$/);
+          const evaluateFilter = async (modelId: string, filter: ProviderFilterConfig | null) => {
+            const snapshot = await metadataCatalog.getModelEndpoints(modelId);
+            return evaluateProviderEndpoints(snapshot.data, filter, { modelId, metadataFetchedAt: snapshot.fetchedAt, metadataState: snapshot.state });
+          };
+          if (filterMatch && req.method === "GET") {
+            const modelId = decodeModelId(filterMatch[1]); if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            const desired = desiredModels.get(modelId); if (!desired) return writeError(res, 404, "Desired model not found", "DESIRED_MODEL_NOT_FOUND");
+            return writeJson(res, 200, { filter: desired.providerFilter, preview: await evaluateFilter(modelId, desired.providerFilter) });
+          }
+          if (filterPreviewMatch && req.method === "POST") {
+            const modelId = decodeModelId(filterPreviewMatch[1]); if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            if (!desiredModels.get(modelId)) return writeError(res, 404, "Desired model not found", "DESIRED_MODEL_NOT_FOUND");
+            const input = await readJsonBody(req, cfg.max_body_bytes) as { conditions?: unknown };
+            if (!Array.isArray(input.conditions)) return writeError(res, 400, "conditions must be an array", "INVALID_FILTER");
+            const filter: ProviderFilterConfig = { enabled: true, mode: "all", conditions: input.conditions as ProviderFilterConfig["conditions"], maxTelemetryAgeMs: 300_000, updatedAt: new Date().toISOString() };
+            return writeJson(res, 200, await evaluateFilter(modelId, filter));
+          }
+          if (filterMatch && req.method === "PUT") {
+            const modelId = decodeModelId(filterMatch[1]); if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            const input = await readJsonBody(req, cfg.max_body_bytes) as ProviderFilterConfig;
+            if (!input || input.mode !== "all" || !Array.isArray(input.conditions) || typeof input.enabled !== "boolean") return writeError(res, 400, "Invalid filter", "INVALID_FILTER");
+            const filter = { ...input, updatedAt: new Date().toISOString() };
+            try { desiredModels.setProviderFilter(modelId, filter); return writeJson(res, 200, { filter, preview: await evaluateFilter(modelId, filter) }); } catch { return writeError(res, 404, "Desired model not found", "DESIRED_MODEL_NOT_FOUND"); }
+          }
+          if (filterMatch && req.method === "DELETE") {
+            const modelId = decodeModelId(filterMatch[1]); if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
+            try { desiredModels.setProviderFilter(modelId, null); return writeJson(res, 200, { modelId, deleted: true }); } catch { return writeError(res, 404, "Desired model not found", "DESIRED_MODEL_NOT_FOUND"); }
+          }
           if (url.pathname === "/api/desired-models" && req.method === "GET") {
             const assignedCounts = new Map<string, number>();
             for (const key of accessKeys.list()) for (const modelId of key.allowedModels) assignedCounts.set(modelId, (assignedCounts.get(modelId) ?? 0) + 1);
@@ -616,6 +647,23 @@ export function startServer(cfg: ShimConfig): http.Server {
             mergeMode: cfg.merge_mode,
             softEnforceOnly: cfg._runtime.soft_enforce_only,
           });
+          const filter = desiredModels.get(typeof body?.model === "string" ? body.model : "")?.providerFilter;
+          if (filter?.enabled) {
+            const endpointSnapshot = await metadataCatalog.getModelEndpoints(body.model);
+            const result = evaluateProviderEndpoints(endpointSnapshot.data, filter, { modelId: body.model, metadataFetchedAt: endpointSnapshot.fetchedAt, metadataState: endpointSnapshot.state });
+            if (endpointSnapshot.state !== "fresh" || !result.usable || result.eligibleRoutingIds.length === 0) {
+              finishObservation({ status: 503, error: { code: result.failureReason ?? "NO_ELIGIBLE_PROVIDER", message: "Provider filter has no current eligible endpoint" } });
+              return writeError(res, 503, "Provider filter has no current eligible endpoint", result.failureReason ?? "NO_ELIGIBLE_PROVIDER");
+            }
+            const currentOnly = body?.provider?.only as string[] | undefined;
+            const hardOnly = currentOnly ? result.eligibleRoutingIds.filter((id) => currentOnly.includes(id)) : result.eligibleRoutingIds;
+            if (!hardOnly.length) {
+              finishObservation({ status: 403, error: { code: "NO_ELIGIBLE_PROVIDER", message: "Provider policy excludes every eligible endpoint" } });
+              return writeError(res, 403, "Provider policy excludes every eligible endpoint", "NO_ELIGIBLE_PROVIDER");
+            }
+            body = { ...body, provider: { ...(body.provider ?? {}), only: hardOnly } };
+            requestTracker.update(observationId ?? "", { effectiveProviderPolicy: body.provider });
+          }
         } catch (err: any) {
           if (err.code === "ERR_PROVIDER_CONFLICT") {
             finishObservation({ status: 422, error: { code: err.code, message: err.message } });

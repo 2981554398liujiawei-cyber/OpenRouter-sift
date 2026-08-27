@@ -54,6 +54,37 @@ export interface DesiredModel {
   updatedAt?: string;
   assignedApiCount?: number;
   assignedApis?: number | string[];
+  providerFilter?: ProviderFilterConfig | null;
+}
+
+export type FilterOperator = "lte" | "gte" | "eq" | "in" | "contains" | "exists";
+export interface ProviderFilterCondition {
+  id: string;
+  field: string;
+  operator: FilterOperator;
+  value: unknown;
+  enabled: boolean;
+}
+export interface ProviderFilterConfig {
+  enabled: boolean;
+  mode: "all";
+  conditions: ProviderFilterCondition[];
+  maxTelemetryAgeMs: number;
+  updatedAt?: string;
+}
+export interface FilterPreviewEndpoint {
+  providerName: string | null;
+  providerRoutingId: string | null;
+  eligible: boolean;
+  reasons: Array<{ conditionId?: string; code?: string; message: string }>;
+  [key: string]: unknown;
+}
+export interface FilterPreview {
+  total: number;
+  eligible: number;
+  eligibleRoutingIds: string[];
+  endpoints: FilterPreviewEndpoint[];
+  metadata?: { fetchedAt?: string | null; stale?: boolean };
 }
 
 export interface AccessKey {

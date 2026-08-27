@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { DesiredModelDetail } from "./DesiredModelDetail";
 import type { AccessKey, AccessKeySecret, DesiredModel, Endpoint, ModelSummary, PolicyMode, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
 
 type Page = "models" | "desired" | "keys" | "policies" | "settings" | "requests";
@@ -39,6 +40,7 @@ export function App() {
   const [desiredModels, setDesiredModels] = useState<DesiredModel[]>([]);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedDesired, setSelectedDesired] = useState(false);
   const [status, setStatus] = useState<{ proxy: { running: boolean }; openrouter: { configured: boolean } } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,9 +71,9 @@ export function App() {
 
   return <main className="shell">
     <header className="topbar">
-      <button className="brand" onClick={() => { setSelectedId(null); setPage("models"); }}>OpenRouter <strong>Control</strong></button>
+      <button className="brand" onClick={() => { setSelectedId(null); setSelectedDesired(false); setPage("models"); }}>OpenRouter <strong>Control</strong></button>
       <nav aria-label="Primary navigation">
-        {(["models", "desired", "keys", "policies", "requests", "settings"] as Page[]).map((item) => <button key={item} className={page === item && !selectedId ? "nav-active" : ""} onClick={() => { setSelectedId(null); setPage(item); }}>{item === "keys" ? "API Keys" : item === "desired" ? "Desired Models" : item}</button>)}
+        {(["models", "desired", "keys", "policies", "requests", "settings"] as Page[]).map((item) => <button key={item} className={page === item && !selectedId ? "nav-active" : ""} onClick={() => { setSelectedId(null); setSelectedDesired(false); setPage(item); }}>{item === "keys" ? "API Keys" : item === "desired" ? "Desired Models" : item}</button>)}
       </nav>
       <div className="status-group" aria-label="Service status">
         <span className={status?.proxy.running ? "status good" : "status"}>Proxy {status?.proxy.running ? "Running" : "Unknown"}</span>
@@ -79,7 +81,7 @@ export function App() {
       </div>
     </header>
     {(notice || error) && <div className={error ? "message error" : "message"}>{error ?? notice}<button aria-label="Dismiss message" onClick={() => { setError(null); setNotice(null); }}>×</button></div>}
-    {selectedId ? <ModelDetail modelId={selectedId} onBack={() => setSelectedId(null)} onSaved={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "models" ? <ModelsPage models={models} desired={desiredModels} query={query} setQuery={setQuery} loadModels={loadModels} refreshModels={refreshModels} onOpen={openModel} onDesiredChange={() => void loadModels()} setError={setError} /> : page === "desired" ? <DesiredModelsPage models={models} desired={desiredModels} onChanged={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "keys" ? <AccessKeysPage desired={desiredModels} setNotice={setNotice} setError={setError} /> : page === "policies" ? <PoliciesPage onOpen={openModel} setNotice={setNotice} setError={setError} /> : page === "settings" ? <SettingsPage setNotice={setNotice} setError={setError} /> : <RequestsPage setNotice={setNotice} setError={setError} />}
+    {selectedId ? selectedDesired ? <DesiredModelDetail modelId={selectedId} models={models} onBack={() => { setSelectedId(null); setSelectedDesired(false); }} setNotice={setNotice} setError={setError} /> : <ModelDetail modelId={selectedId} onBack={() => setSelectedId(null)} onSaved={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "models" ? <ModelsPage models={models} desired={desiredModels} query={query} setQuery={setQuery} loadModels={loadModels} refreshModels={refreshModels} onOpen={openModel} onDesiredChange={() => void loadModels()} setError={setError} /> : page === "desired" ? <DesiredModelsPage models={models} desired={desiredModels} onChanged={() => void loadModels()} onOpen={(id) => { setSelectedId(id); setSelectedDesired(true); }} setNotice={setNotice} setError={setError} /> : page === "keys" ? <AccessKeysPage desired={desiredModels} setNotice={setNotice} setError={setError} /> : page === "policies" ? <PoliciesPage onOpen={openModel} setNotice={setNotice} setError={setError} /> : page === "settings" ? <SettingsPage setNotice={setNotice} setError={setError} /> : <RequestsPage setNotice={setNotice} setError={setError} />}
   </main>;
 }
 
@@ -94,10 +96,10 @@ function ModelsPage({ models, desired, query, setQuery, loadModels, refreshModel
 
 function EmptyCatalog() { return <div className="empty"><h2>No cached models yet</h2><p>Configure an OpenRouter key outside the UI, then refresh the catalog.</p></div>; }
 
-function DesiredModelsPage({ models, desired, onChanged, setNotice, setError }: { models: ModelSummary[]; desired: DesiredModel[]; onChanged: () => void; setNotice: (value: string) => void; setError: (value: string) => void }) {
+function DesiredModelsPage({ models, desired, onChanged, onOpen, setNotice, setError }: { models: ModelSummary[]; desired: DesiredModel[]; onChanged: () => void; onOpen: (id: string) => void; setNotice: (value: string) => void; setError: (value: string) => void }) {
   const names = new Map(models.map((model) => [model.id, model.name || model.id]));
   const remove = async (id: string) => { try { await api.removeDesiredModel(id); onChanged(); setNotice("Model removed from Desired Models."); } catch (err) { setError((err as Error).message); } };
-  return <section className="page"><div className="page-heading"><div><p className="eyebrow">Access boundary</p><h1>Desired Models</h1><p>Only models in this pool can be assigned to managed Local Access Keys.</p></div></div><div className="panel table-wrap"><table><thead><tr><th>Model</th><th>Enabled</th><th>Assigned APIs</th><th /></tr></thead><tbody>{desired.length === 0 ? <tr><td colSpan={4}>No Desired Models yet. Add one from All Models.</td></tr> : desired.map((item) => <tr key={item.modelId}><td><strong>{names.get(item.modelId) ?? item.modelId}</strong><small>{item.modelId}</small></td><td>{item.enabled === false ? "Disabled" : "Enabled"}</td><td>{typeof item.assignedApiCount === "number" ? item.assignedApiCount : Array.isArray(item.assignedApis) ? item.assignedApis.length : typeof item.assignedApis === "number" ? item.assignedApis : 0}</td><td className="table-actions"><button onClick={() => void remove(item.modelId)}>Remove</button></td></tr>)}</tbody></table></div></section>;
+  return <section className="page"><div className="page-heading"><div><p className="eyebrow">Access boundary</p><h1>Desired Models</h1><p>Only models in this pool can be assigned to managed Local Access Keys.</p></div></div><div className="panel table-wrap"><table><thead><tr><th>Model</th><th>Enabled</th><th>Assigned APIs</th><th /></tr></thead><tbody>{desired.length === 0 ? <tr><td colSpan={4}>No Desired Models yet. Add one from All Models.</td></tr> : desired.map((item) => <tr key={item.modelId}><td><button className="model-link" onClick={() => onOpen(item.modelId)}><strong>{names.get(item.modelId) ?? item.modelId}</strong><small>{item.modelId}</small></button></td><td>{item.enabled === false ? "Disabled" : "Enabled"}</td><td>{typeof item.assignedApiCount === "number" ? item.assignedApiCount : Array.isArray(item.assignedApis) ? item.assignedApis.length : typeof item.assignedApis === "number" ? item.assignedApis : 0}</td><td className="table-actions"><button onClick={() => void remove(item.modelId)}>Remove</button></td></tr>)}</tbody></table></div></section>;
 }
 
 function AccessKeysPage({ desired, setNotice, setError }: { desired: DesiredModel[]; setNotice: (value: string) => void; setError: (value: string) => void }) {
