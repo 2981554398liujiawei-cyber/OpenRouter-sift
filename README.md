@@ -15,7 +15,7 @@ OpenRouter supports a `provider` object for routing preferences including `only`
 - **Multi-protocol support**: Anthropic Messages API, OpenAI Chat Completions, and OpenAI Responses API
 - **Provider routing enforcement**: Merge, override, or strict modes for provider policies
 - **Flexible authentication**: Passthrough or upstream-key auth modes
-- **Zero dependencies for runtime**: Uses only Node.js built-ins
+- **Local control UI**: Models, endpoints, policies, preview, and settings at `/ui`
 - **Privacy-first logging**: Logs metadata only, never prompt content
 - **Cross-platform**: Works on macOS, Linux, and Windows
 
@@ -31,6 +31,19 @@ openrouter-provider-shim serve --port 8787
 ```
 
 ## Quick Start
+
+### OpenRouter Control UI
+
+From a checkout, install once and start the local proxy plus the UI asset watcher:
+
+```bash
+npm install
+npm run dev
+```
+
+Open [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui). Set `OPENROUTER_API_KEY` (or pass `--upstream-key`) before refreshing the model catalog. The API key is intentionally configured outside the browser UI and is never returned to it.
+
+For a built checkout, use `npm run build` followed by `npm start`.
 
 ### Claude Code
 
@@ -294,7 +307,7 @@ G1 adds a local, persisted policy store. By default it is `openrouter-control-po
 }
 ```
 
-`inherit` (or a missing model entry) uses the configured global `policy`; `allowlist` compiles to `provider.only`; `blocklist` compiles to `provider.ignore`; and `custom` accepts a validated OpenRouter provider policy. G3 will add the management API and G4 the visual editor, so manual editing is temporary. Do not place API keys, prompts, or responses in this file.
+`inherit` (or a missing model entry) uses the configured global `policy`; `allowlist` compiles to `provider.only`; `blocklist` compiles to `provider.ignore`; and `custom` accepts a validated OpenRouter provider policy. The `/ui` editor is the preferred way to manage these entries. Do not place API keys, prompts, or responses in this file.
 
 ### OpenRouter metadata catalog (G2)
 
@@ -308,6 +321,14 @@ The proxy caches the model directory in `openrouter-control-metadata.json` (chan
 | `POST /api/models/:modelId/endpoints/refresh` | Force endpoint refresh |
 
 The API returns a stable DTO and does not expose cached raw metadata. Provider display names and OpenRouter routing identifiers are separate fields; no identifier is derived from display text.
+
+### Control UI and management API (G3/G4)
+
+The same local server serves the React control interface at `/ui` and management API at `/api/*`; neither affects proxy routes under `/v1/*`. The Models view searches the local catalog, loads endpoint metadata on demand, and shows unavailable OpenRouter metrics as `—`. The policy editor uses a server-side preview, so the displayed provider JSON is compiled by the same resolver that handles proxy traffic.
+
+The UI supports `inherit`, allowlist, and blocklist policies. Allowlist ordering uses the verified `providerRoutingId` from endpoint metadata, and an empty allowlist cannot be saved. The Policies page can reset an entry by deleting the model-specific policy, returning it to global/inherit behavior.
+
+Settings persist merge mode, global policy, and metadata cache TTL. The configured API-key state is display-only: runtime key updates are deliberately rejected, so use environment variables or startup options instead.
 
 ## Merge Modes
 

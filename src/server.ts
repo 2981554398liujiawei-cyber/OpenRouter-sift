@@ -13,8 +13,13 @@ import { redactBody } from "./util/redact.js";
 import { getVersion } from "./util/version.js";
 import { ProviderPolicySchema, type ShimConfig } from "./config.js";
 import { JsonSettingsStore, type ControlSettings } from "./storage/settings.js";
+import { serveControlUi } from "./controlUi.js";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const OPENROUTER_BASE_V1 = "https://openrouter.ai/api/v1";
+// In the bundled CLI, the UI lives beside `dist/server`, not beside the caller's cwd.
+const CONTROL_UI_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..", "ui");
 
 // Anthropic model names that Claude Code uses internally (for title generation, etc.)
 // These need to be remapped to the user's preferred model
@@ -222,6 +227,10 @@ export function startServer(cfg: ShimConfig): http.Server {
         const authError = validateLocalAuth(req, cfg.local_api_key);
         if (authError) return writeError(res, authError.status, authError.message, authError.code);
       }
+
+      // The control UI is a local, separately built asset bundle. Keep it outside
+      // the management and proxy namespaces so it cannot alter their behavior.
+      if (serveControlUi(req, res, url.pathname, CONTROL_UI_DIRECTORY)) return;
 
       if (url.pathname.startsWith("/api/")) {
         const endpointMatch = url.pathname.match(/^\/api\/models\/(.+)\/endpoints$/);

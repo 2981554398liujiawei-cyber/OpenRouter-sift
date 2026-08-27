@@ -4,27 +4,42 @@
   "description": "Local npx shim that injects OpenRouter provider routing for Claude Code and OpenAI-compatible harnesses",
   "type": "module",
   "bin": {
-    "openrouter-provider-shim": "./dist/cli.js"
+    "openrouter-provider-shim": "./dist/server/cli.js"
   },
   "engines": {
     "node": ">=18.17.0"
   },
   "scripts": {
-    "build": "tsup src/cli.ts --format esm --dts --clean",
-    "dev": "node --watch dist/cli.js serve --port 8787",
+    "build": "npm run build:ui && npm run build:server",
+    "build:server": "tsup src/cli.ts --format esm --dts --clean --out-dir dist/server",
+    "build:ui": "vite build",
+    "dev": "concurrently -k \"npm run dev:server\" \"npm run dev:ui\"",
+    "dev:server": "npm run build:server && node --watch dist/server/cli.js serve --port 8787",
+    "dev:ui": "vite build --watch",
+    "start": "node dist/server/cli.js serve --port 8787",
     "lint": "eslint .",
-    "test": "vitest"
+    "test": "vitest run"
   },
   "dependencies": {
     "commander": "^12.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.6",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.4",
+    "eslint": "^9.0.0",
+    "jsdom": "^24.1.3",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0",
-    "vitest": "^2.0.0",
-    "@types/node": "^22.0.0",
-    "eslint": "^9.0.0"
+    "vite": "^5.4.21",
+    "vitest": "^2.0.0"
   },
   "keywords": [
     "openrouter",
