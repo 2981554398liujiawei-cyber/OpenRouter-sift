@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { evaluateProviderEndpoints } from "../src/providerFilters/evaluator.js";
 import { getFilterFieldRegistry } from "../src/providerFilters/registry.js";
+import { providerFilterConfigSchema } from "../src/providerFilters/schema.js";
 import type { EndpointDto } from "../src/openrouter/endpoints.js";
 
 const endpoint = (patch: Partial<EndpointDto> = {}): EndpointDto => ({
@@ -54,5 +55,12 @@ describe("provider filter engine", () => {
     const fields = getFilterFieldRegistry([endpoint()]);
     expect(fields.find((field) => field.id === "pricing.input_cache_read")?.unit).toBe("$/1M");
     expect(fields.find((field) => field.id === "pricing.discount")).toBeDefined();
+  });
+
+  it("rejects invalid telemetry values and duplicate condition IDs", () => {
+    const base = { enabled: true, mode: "all" as const, maxTelemetryAgeMs: 60_000, updatedAt: "now", conditions: [{ id: "a", field: "pricing.prompt", operator: "lte" as const, value: 0.2, enabled: true }] };
+    expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [{ ...base.conditions[0], value: -1 }] }).success).toBe(false);
+    expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [{ ...base.conditions[0], field: "uptime.5m", value: 101 }] }).success).toBe(false);
+    expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [base.conditions[0], base.conditions[0]] }).success).toBe(false);
   });
 });

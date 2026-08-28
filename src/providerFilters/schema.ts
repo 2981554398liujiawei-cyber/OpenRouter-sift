@@ -32,7 +32,7 @@ export const providerFilterConditionSchema = z.object({
   if (condition.operator === "contains" && typeof condition.value !== "string") {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["value"], message: "Contains filters require a string" });
   }
-  if (["lte", "gte"].includes(condition.operator) && (typeof condition.value !== "number" || !Number.isFinite(condition.value))) {
+  if (["lte", "gte"].includes(condition.operator) && (typeof condition.value !== "number" || !Number.isFinite(condition.value) || condition.value < 0 || (condition.field.startsWith("uptime.") && condition.value > 100))) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["value"], message: "Threshold filters require a finite number" });
   }
 });
@@ -43,6 +43,12 @@ export const providerFilterConfigSchema = z.object({
   conditions: z.array(providerFilterConditionSchema).max(100),
   maxTelemetryAgeMs: z.number().int().min(0).max(30 * 24 * 60 * 60 * 1000),
   updatedAt: z.string().min(1).max(64),
-}).strict();
+}).strict().superRefine((filter, ctx) => {
+  const ids = new Set<string>();
+  for (const [index, condition] of filter.conditions.entries()) {
+    if (ids.has(condition.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["conditions", index, "id"], message: "Condition IDs must be unique" });
+    ids.add(condition.id);
+  }
+});
 
 export type ValidatedProviderFilterConfig = z.infer<typeof providerFilterConfigSchema>;
