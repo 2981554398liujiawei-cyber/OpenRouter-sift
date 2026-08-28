@@ -118,6 +118,7 @@ describe("G9.1 catalog UX closure", () => {
     expect(window.location.search).toContain("page=1"); // sort change resets page
     fireEvent.click(screen.getByText("Next"));
     await waitFor(() => expect(window.location.search).toContain("page=2"));
+    fireEvent.click(screen.getByText("More filters"));
     fireEvent.click(screen.getByLabelText("Free only"));
     await waitFor(() => expect(window.location.search).toContain("free=1"));
     expect(window.location.search).toContain("page=1"); // filter change resets page
@@ -128,6 +129,7 @@ describe("G9.1 catalog UX closure", () => {
     window.history.replaceState(null, "", "/ui/models?page=-1&context=abc&sort=banana&free=hello");
     render(<App />);
     await screen.findByText("GPT Demo");
+    fireEvent.click(screen.getByText("More filters"));
     expect(inputValue("Search models")).toBe("");
     expect(selectValue("Context length")).toBe("0");
     expect(selectValue("Sort models")).toBe("default");

@@ -22,7 +22,7 @@ describe("Desired Model provider filters UI", () => {
     render(<App />);
     fireEvent.click(await screen.findByText("Desired Models"));
     fireEvent.click(await screen.findByText("DeepSeek Demo"));
-    expect(await screen.findByText("Hard Provider Filters")).toBeTruthy();
+    expect(await screen.findByText("Provider Filters")).toBeTruthy();
     fireEvent.click(screen.getByText("+ Add condition"));
     fireEvent.change(screen.getByLabelText("Filter value"), { target: { value: "40" } });
     expect(await screen.findByText("1 endpoints → 1 eligible")).toBeTruthy();

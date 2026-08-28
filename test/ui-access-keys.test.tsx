@@ -23,12 +23,12 @@ describe("managed access key UI", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByText("API Keys"));
-    fireEvent.click(await screen.findByText("Create"));
+    fireEvent.click(screen.getAllByText("Create API Key")[0]);
     fireEvent.change(screen.getByPlaceholderText("Codex"), { target: { value: "Codex" } });
     fireEvent.click(screen.getByLabelText("deepseek/deepseek-v4-flash"));
     fireEvent.click(screen.getByText("Create key"));
     expect(await screen.findByText("sift_sk_once_only_1234")).toBeTruthy();
-    expect(screen.getByText(/It will not be shown again/)).toBeTruthy();
+    expect(screen.getByText(/won't be shown again/)).toBeTruthy();
     expect(JSON.parse(calls.find((call) => call.method === "POST")?.body ?? "{}").allowedModels).toEqual(["deepseek/deepseek-v4-flash"]);
     fireEvent.click(screen.getByText("Done"));
     expect(screen.queryByText("sift_sk_once_only_1234")).toBeNull();

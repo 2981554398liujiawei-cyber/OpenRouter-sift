@@ -25,7 +25,7 @@ describe("Requests UI", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(<App />);
-    fireEvent.click(await screen.findByText("requests"));
+    fireEvent.click(screen.getByRole("button", { name: "Requests" }));
     expect(await screen.findByText("Resolving…")).toBeTruthy();
     expect(screen.getByText("4.8 s")).toBeTruthy();
     expect(screen.getByText("8.2K → 1.4K")).toBeTruthy();
@@ -33,7 +33,7 @@ describe("Requests UI", () => {
     fireEvent.change(screen.getByLabelText("Search model"), { target: { value: "gpt-demo" } });
     await waitFor(() => expect(calls.join("\n")).toContain("model=gpt-demo"));
     fireEvent.click(screen.getByText("openai/gpt-demo"));
-    expect(await screen.findByText("Provider Policy Used")).toBeTruthy();
+    expect(await screen.findByText("Routing Decision")).toBeTruthy();
     expect(screen.queryByText("SUPER_SECRET_PROMPT_12345")).toBeNull();
     fireEvent.click(screen.getByText("Close"));
     fireEvent.click(screen.getByText("Clear history"));
