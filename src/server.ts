@@ -462,7 +462,7 @@ export function startServer(cfg: ShimConfig): http.Server {
               const hardResult = desired?.providerFilter?.enabled && snapshot.available
                 ? evaluateProviderEndpoints(snapshot.data, desired.providerFilter, { modelId, metadataFetchedAt: snapshot.fetchedAt, metadataState: isTelemetryFresh(snapshot.fetchedAt, desired.providerFilter.maxTelemetryAgeMs) ? "fresh" : "stale" })
                 : null;
-              const resolution = resolveManagedProviderRouting({ availableRoutingIds: snapshot.data.map((endpoint) => endpoint.providerRoutingId).filter(Boolean), hardFilterEligibleIds: hardResult?.eligibleRoutingIds ?? null, accessKeyOverride: candidateOverride, globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(modelId), incomingProviderPolicy: undefined });
+              const resolution = resolveManagedProviderRouting({ availableRoutingIds: snapshot.available ? snapshot.data.map((endpoint) => endpoint.providerRoutingId).filter(Boolean) : null, hardFilterEligibleIds: hardResult?.eligibleRoutingIds ?? null, accessKeyOverride: candidateOverride, globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(modelId), incomingProviderPolicy: undefined, mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
               return writeJson(res, 200, { hardFilter: { eligible: hardResult?.eligibleRoutingIds ?? null }, accessKeyOverride: { eligible: resolution.trace.accessKeyOverride }, modelPolicy: { eligible: resolution.trace.modelPolicy }, incoming: { eligible: null }, final: { eligible: resolution.finalEligibleRoutingIds, providerPolicy: resolution.finalProviderPolicy }, trace: resolution.trace });
             } catch (err: any) { return writeError(res, 422, err?.message ?? "Invalid model override", "INVALID_MODEL_OVERRIDE"); }
           }
@@ -768,7 +768,7 @@ export function startServer(cfg: ShimConfig): http.Server {
               requestTracker.update(observationId ?? "", { effectiveProviderPolicy: effectiveProviderPolicy ?? null, accessKeyModelOverrideSnapshot: override ?? null });
             } else {
             const endpointSnapshot = metadataCatalog.getModelEndpointsSnapshot(body.model);
-            const requiresSnapshot = true;
+            const requiresSnapshot = Boolean(filter?.enabled);
             if (requiresSnapshot && !endpointSnapshot.available) {
               finishObservation({ status: 503, error: { code: "FILTER_DATA_UNAVAILABLE", message: "Provider routing data is unavailable" } });
               return writeError(res, 503, "Provider routing data is unavailable", "FILTER_DATA_UNAVAILABLE");
@@ -780,9 +780,9 @@ export function startServer(cfg: ShimConfig): http.Server {
               finishObservation({ status: 503, error: { code: result?.failureReason ?? "NO_ELIGIBLE_PROVIDER", message: "Provider filter has no current eligible endpoint" } });
               return writeError(res, 503, "Provider filter has no current eligible endpoint", result?.failureReason ?? "NO_ELIGIBLE_PROVIDER");
             }
-            const availableRoutingIds = endpointSnapshot.available ? endpointSnapshot.data.map((endpoint) => endpoint.providerRoutingId).filter(Boolean) : (body.provider?.only ?? []);
-            const resolution = resolveManagedProviderRouting({ availableRoutingIds, hardFilterEligibleIds: result?.eligibleRoutingIds ?? null, accessKeyOverride: override, globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(body.model), incomingProviderPolicy: body.provider });
-            if (!resolution.finalEligibleRoutingIds.length) {
+            const availableRoutingIds = endpointSnapshot.available ? endpointSnapshot.data.map((endpoint) => endpoint.providerRoutingId).filter(Boolean) : null;
+            const resolution = resolveManagedProviderRouting({ availableRoutingIds, hardFilterEligibleIds: result?.eligibleRoutingIds ?? null, accessKeyOverride: override, globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(body.model), incomingProviderPolicy: body.provider, mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
+            if (resolution.finalEligibleRoutingIds?.length === 0) {
               finishObservation({ status: 403, error: { code: "NO_ELIGIBLE_PROVIDER", message: "No provider survives the managed routing restrictions" } });
               return writeError(res, 403, "No provider survives the managed routing restrictions", "NO_ELIGIBLE_PROVIDER");
             }

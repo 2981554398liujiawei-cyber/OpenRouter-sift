@@ -27,4 +27,17 @@ describe("managed provider routing", () => {
     const result = resolveManagedProviderRouting({ ...base, accessKeyOverride: { providerMode: "inherit", allowFallbacks: true }, modelPolicy: { mode: "allowlist", providers: ["a"], allow_fallbacks: false } });
     expect(result.finalProviderPolicy.allow_fallbacks).toBe(false);
   });
+  it("keeps an unavailable provider universe unbounded when no hard filter exists", () => {
+    const inherited = resolveManagedProviderRouting({ ...base, availableRoutingIds: null, hardFilterEligibleIds: null, accessKeyOverride: { providerMode: "inherit" } });
+    expect(inherited.finalEligibleRoutingIds).toBeNull();
+    expect(inherited.finalProviderPolicy.only).toBeUndefined();
+    const allowlisted = resolveManagedProviderRouting({ ...base, availableRoutingIds: null, hardFilterEligibleIds: null, accessKeyOverride: { providerMode: "allowlist", providers: ["a", "b"] } });
+    expect(allowlisted.finalProviderPolicy.only).toEqual(["a", "b"]);
+    const blocked = resolveManagedProviderRouting({ ...base, availableRoutingIds: null, hardFilterEligibleIds: null, accessKeyOverride: { providerMode: "blocklist", providers: ["c"] } });
+    expect(blocked.finalProviderPolicy).toMatchObject({ ignore: ["c"] });
+  });
+  it("preserves merged client provider preferences behind the managed boundary", () => {
+    const result = resolveManagedProviderRouting({ ...base, accessKeyOverride: { providerMode: "allowlist", providers: ["a"] }, incomingProviderPolicy: { max_price: { prompt: 1 }, quantizations: ["fp16"], require_parameters: true, only: ["a", "b"] } });
+    expect(result.finalProviderPolicy).toMatchObject({ only: ["a"], max_price: { prompt: 1 }, quantizations: ["fp16"], require_parameters: true });
+  });
 });

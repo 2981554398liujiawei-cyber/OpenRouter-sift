@@ -1,80 +1,74 @@
 import type { ProviderPolicy } from "../config.js";
 import type { AccessKeyModelOverride } from "../access/schema.js";
 import { compileModelPolicy, type ModelPolicy } from "./modelPolicy.js";
+import { resolveProviderPolicy } from "./resolver.js";
 
 export interface ManagedRoutingTrace {
   hardFilter: string[] | null;
   accessKeyOverride: string[] | null;
   modelPolicy: string[] | null;
   incoming: string[] | null;
-  final: string[];
+  final: string[] | null;
   rejectedAt: "hard_filter" | "access_key_override" | "model_policy" | "incoming" | null;
 }
-
 export interface ManagedRoutingResolution {
   finalProviderPolicy: ProviderPolicy;
-  finalEligibleRoutingIds: string[];
+  finalEligibleRoutingIds: string[] | null;
   trace: ManagedRoutingTrace;
 }
-
 export interface ManagedRoutingInput {
-  availableRoutingIds: string[];
+  availableRoutingIds: string[] | null;
   hardFilterEligibleIds: string[] | null;
   accessKeyOverride: AccessKeyModelOverride | undefined;
   globalPolicy: ProviderPolicy;
   modelPolicy: ModelPolicy | undefined;
   incomingProviderPolicy: ProviderPolicy | undefined;
+  mergeMode?: "merge" | "override" | "strict";
+  softEnforceOnly?: boolean;
 }
-
+interface ProviderSetConstraint { only: string[] | null; ignore: string[]; }
 const unique = (items: string[]) => [...new Set(items)];
-const intersect = (items: string[], restriction?: string[]) => restriction ? items.filter((item) => restriction.includes(item)) : items;
-const exclude = (items: string[], ignored?: string[]) => ignored?.length ? items.filter((item) => !ignored.includes(item)) : items;
-
+const intersect = (items: string[], restriction: string[]) => items.filter((item) => restriction.includes(item));
+const addIgnore = (constraint: ProviderSetConstraint, ignored?: string[]) => ({ ...constraint, ignore: unique([...constraint.ignore, ...(ignored ?? [])]) });
+function applyOnly(constraint: ProviderSetConstraint, only?: string[]): ProviderSetConstraint {
+  return only ? { ...constraint, only: constraint.only === null ? unique(only) : intersect(constraint.only, only) } : constraint;
+}
+function visible(constraint: ProviderSetConstraint): string[] | null {
+  return constraint.only === null ? null : constraint.only.filter((id) => !constraint.ignore.includes(id));
+}
 function serverPolicy(globalPolicy: ProviderPolicy, modelPolicy: ModelPolicy | undefined): ProviderPolicy {
   return compileModelPolicy(modelPolicy) ?? globalPolicy;
 }
 
-/**
- * Resolves managed-key provider routing without I/O. Every stage starts from
- * known endpoint routing tags and can only preserve or shrink that set.
- */
+/** Pure managed-key resolver. Null means intentionally unbounded, never empty. */
 export function resolveManagedProviderRouting(input: ManagedRoutingInput): ManagedRoutingResolution {
-  const available = unique(input.availableRoutingIds);
-  let final = input.hardFilterEligibleIds === null ? available : intersect(available, unique(input.hardFilterEligibleIds));
-  const trace: ManagedRoutingTrace = { hardFilter: input.hardFilterEligibleIds === null ? null : [...final], accessKeyOverride: null, modelPolicy: null, incoming: null, final: [], rejectedAt: null };
-  if (!final.length) { trace.rejectedAt = "hard_filter"; return { finalProviderPolicy: { only: [] }, finalEligibleRoutingIds: [], trace }; }
-
   const override = input.accessKeyOverride?.providerMode === "inherit" ? undefined : input.accessKeyOverride;
-  if (override?.providerMode === "allowlist") final = intersect(final, override.providers ?? []);
-  else if (override?.providerMode === "blocklist") final = exclude(final, override.providers);
-  if (override) trace.accessKeyOverride = [...final];
-  if (!final.length) { trace.rejectedAt = "access_key_override"; return { finalProviderPolicy: { only: [] }, finalEligibleRoutingIds: [], trace }; }
+  let constraint: ProviderSetConstraint = { only: input.hardFilterEligibleIds ?? input.availableRoutingIds, ignore: [] };
+  let current = visible(constraint);
+  const trace: ManagedRoutingTrace = { hardFilter: input.hardFilterEligibleIds, accessKeyOverride: null, modelPolicy: null, incoming: null, final: null, rejectedAt: null };
+  if (current?.length === 0) { trace.rejectedAt = "hard_filter"; return { finalProviderPolicy: { only: [] }, finalEligibleRoutingIds: [], trace }; }
 
-  const policy = serverPolicy(input.globalPolicy, input.modelPolicy);
-  final = exclude(intersect(final, policy.only), policy.ignore);
-  trace.modelPolicy = [...final];
-  if (!final.length) { trace.rejectedAt = "model_policy"; return { finalProviderPolicy: { only: [] }, finalEligibleRoutingIds: [], trace }; }
+  if (override?.providerMode === "allowlist") constraint = applyOnly(constraint, override.providers);
+  if (override?.providerMode === "blocklist") constraint = addIgnore(constraint, override.providers);
+  current = visible(constraint); trace.accessKeyOverride = override ? current : null;
+  if (current?.length === 0) { trace.rejectedAt = "access_key_override"; return { finalProviderPolicy: { only: [] }, finalEligibleRoutingIds: [], trace }; }
+
+  const enforced = serverPolicy(input.globalPolicy, input.modelPolicy);
+  constraint = addIgnore(applyOnly(constraint, enforced.only), enforced.ignore);
+  current = visible(constraint); trace.modelPolicy = current;
+  if (current?.length === 0) { trace.rejectedAt = "model_policy"; return { finalProviderPolicy: { only: [] }, finalEligibleRoutingIds: [], trace }; }
 
   const incoming = input.incomingProviderPolicy;
-  final = exclude(intersect(final, incoming?.only), incoming?.ignore);
-  trace.incoming = incoming ? [...final] : null;
-  if (!final.length) { trace.rejectedAt = "incoming"; return { finalProviderPolicy: { only: [] }, finalEligibleRoutingIds: [], trace }; }
+  constraint = addIgnore(applyOnly(constraint, incoming?.only), incoming?.ignore);
+  current = visible(constraint); trace.incoming = incoming ? current : null;
+  if (current?.length === 0) { trace.rejectedAt = "incoming"; return { finalProviderPolicy: { only: [] }, finalEligibleRoutingIds: [], trace }; }
 
-  // Explicit key order wins; all other order values are merely client hints
-  // and must never introduce an endpoint outside the enforced final set.
-  const order = (override?.providerOrder?.length ? override.providerOrder : policy.order ?? incoming?.order)?.filter((id) => final.includes(id));
-  const sort = order?.length ? undefined : (override?.sort ?? policy.sort ?? incoming?.sort);
-  const allowFallbacks = override?.allowFallbacks ?? policy.allow_fallbacks ?? incoming?.allow_fallbacks;
-  trace.final = [...final];
-  return {
-    finalProviderPolicy: {
-      ...policy,
-      only: final,
-      ...(order?.length ? { order } : {}),
-      ...(sort === undefined ? {} : { sort }),
-      ...(allowFallbacks === undefined ? {} : { allow_fallbacks: allowFallbacks }),
-    },
-    finalEligibleRoutingIds: final,
-    trace,
-  };
+  const merged = resolveProviderPolicy({ globalPolicy: input.globalPolicy, modelPolicy: input.modelPolicy, incomingPolicy: incoming, mergeMode: input.mergeMode ?? "merge", softEnforceOnly: input.softEnforceOnly ?? false }) ?? {};
+  const { only: _only, ignore: _ignore, order: _order, sort: _sort, allow_fallbacks: _fallback, ...passthrough } = merged;
+  const orderSource = override?.providerOrder?.length ? override.providerOrder : enforced.order ?? incoming?.order;
+  const order = orderSource?.filter((id) => !constraint.ignore.includes(id) && (current === null || current.includes(id)));
+  const sort = order?.length ? undefined : (override?.sort ?? enforced.sort ?? incoming?.sort);
+  const allowFallbacks = override?.allowFallbacks ?? enforced.allow_fallbacks ?? incoming?.allow_fallbacks;
+  trace.final = current;
+  return { finalProviderPolicy: { ...passthrough, ...(current === null ? {} : { only: current }), ...(constraint.ignore.length ? { ignore: constraint.ignore } : {}), ...(order?.length ? { order } : {}), ...(sort === undefined ? {} : { sort }), ...(allowFallbacks === undefined ? {} : { allow_fallbacks: allowFallbacks }) }, finalEligibleRoutingIds: current, trace };
 }
