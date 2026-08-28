@@ -17,7 +17,7 @@ export const accessKeyModelOverrideSchema = z.object({
   allowFallbacks: z.boolean().optional(),
   sort: z.enum(["price", "latency", "throughput"]).nullable().optional(),
 }).strict().superRefine((value, ctx) => {
-  if (value.providerMode === "inherit" && ((value.providers?.length ?? 0) > 0 || (value.providerOrder?.length ?? 0) > 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Inherit mode cannot include provider restrictions", path: ["providers"] });
+  if (value.providerMode === "inherit" && ((value.providers?.length ?? 0) > 0 || (value.providerOrder?.length ?? 0) > 0 || value.allowFallbacks !== undefined || value.sort !== undefined && value.sort !== null)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Inherit mode cannot include routing settings", path: ["providers"] });
   if (value.providerMode === "allowlist" && !value.providers?.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["providers"], message: "Allowlist requires at least one provider" });
   if (value.providerMode === "allowlist" && value.providerOrder?.some((provider) => !value.providers?.includes(provider))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["providerOrder"], message: "Provider order must contain only allowlisted providers" });
   if (value.providerMode === "blocklist" && (value.providerOrder?.length ?? 0) > 0) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Blocklist cannot include provider order", path: ["providerOrder"] });

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { accessKeyLast4, accessKeyPrefix, hashAccessKey, verifyAccessKey } from "../src/access/crypto";
 import { JsonDesiredModelStore } from "../src/access/desiredModelStore";
 import { JsonAccessKeyStore } from "../src/access/accessKeyStore";
+import { accessKeyModelOverrideSchema } from "../src/access/schema";
 
 describe("G6 access stores", () => {
   it("persists desired models and removes them cleanly", () => {
@@ -85,5 +86,11 @@ describe("G6 access stores", () => {
       expect(reloaded.get(created.record.id)?.modelOverrides).toEqual({});
       expect(() => reloaded.update(created.record.id, { modelOverrides: { "provider/model": override } })).toThrow();
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("keeps inherit overrides free of routing settings", () => {
+    expect(accessKeyModelOverrideSchema.safeParse({ providerMode: "inherit" }).success).toBe(true);
+    expect(accessKeyModelOverrideSchema.safeParse({ providerMode: "inherit", allowFallbacks: true }).success).toBe(false);
+    expect(accessKeyModelOverrideSchema.safeParse({ providerMode: "inherit", providers: ["provider-id"] }).success).toBe(false);
   });
 });

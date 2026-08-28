@@ -23,4 +23,8 @@ describe("managed provider routing", () => {
     expect(result.finalEligibleRoutingIds).toEqual([]);
     expect(result.trace.rejectedAt).toBe("incoming");
   });
+  it("does not let inherit override a model fallback setting", () => {
+    const result = resolveManagedProviderRouting({ ...base, accessKeyOverride: { providerMode: "inherit", allowFallbacks: true }, modelPolicy: { mode: "allowlist", providers: ["a"], allow_fallbacks: false } });
+    expect(result.finalProviderPolicy.allow_fallbacks).toBe(false);
+  });
 });

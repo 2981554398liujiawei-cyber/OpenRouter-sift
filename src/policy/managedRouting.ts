@@ -44,7 +44,7 @@ export function resolveManagedProviderRouting(input: ManagedRoutingInput): Manag
   const trace: ManagedRoutingTrace = { hardFilter: input.hardFilterEligibleIds === null ? null : [...final], accessKeyOverride: null, modelPolicy: null, incoming: null, final: [], rejectedAt: null };
   if (!final.length) { trace.rejectedAt = "hard_filter"; return { finalProviderPolicy: { only: [] }, finalEligibleRoutingIds: [], trace }; }
 
-  const override = input.accessKeyOverride;
+  const override = input.accessKeyOverride?.providerMode === "inherit" ? undefined : input.accessKeyOverride;
   if (override?.providerMode === "allowlist") final = intersect(final, override.providers ?? []);
   else if (override?.providerMode === "blocklist") final = exclude(final, override.providers);
   if (override) trace.accessKeyOverride = [...final];
