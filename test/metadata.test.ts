@@ -6,7 +6,7 @@ import { OpenRouterCatalog } from "../src/openrouter/catalog";
 import { OpenRouterClient, OpenRouterMetadataError } from "../src/openrouter/client";
 import { JsonMetadataStore } from "../src/storage/metadata";
 
-const modelResponse = { data: [{ id: "openai/gpt-test", canonical_slug: "gpt-test", name: "GPT Test", context_length: 128000, pricing: { prompt: "0.1" }, architecture: { modality: "text" }, supported_parameters: ["tools"], created: 1 }] };
+const modelResponse = { data: [{ id: "openai/gpt-test", canonical_slug: "gpt-test", name: "GPT Test", description: "Catalog fixture", context_length: 128000, pricing: { prompt: "0.1" }, architecture: { modality: "text", input_modalities: ["text", "image"], output_modalities: ["text"] }, supported_parameters: ["tools"], created: 1, top_provider: { max_completion_tokens: 4096 } }] };
 const endpointResponse = { data: { endpoints: [{ provider_name: "Provider Display", provider_slug: "provider-routing-id", tag: "fp8", pricing: { prompt: "0.1" }, max_prompt_tokens: 64000, max_completion_tokens: 8000, latency_last_30m: { p50: 1, p75: 2, p90: 3, p99: 4 }, throughput_last_30m: { p50: 100, p75: 90, p90: 80, p99: 70 }, uptime_last_5m: 0.99, uptime_last_30m: 0.98, uptime_last_1d: 0.97, quantization: "fp8", status: "available" }] } };
 
 function catalogWith(fetchImpl: typeof fetch, ttlMs = 300_000) {
@@ -25,7 +25,7 @@ describe("OpenRouter metadata catalog", () => {
     const { catalog, store, directory } = catalogWith(fetchImpl as typeof fetch);
     try {
       const result = await catalog.syncModels();
-      expect(result).toMatchObject({ state: "fresh", data: [{ id: "openai/gpt-test", canonicalSlug: "gpt-test", contextLength: 128000 }] });
+      expect(result).toMatchObject({ state: "fresh", data: [{ id: "openai/gpt-test", canonicalSlug: "gpt-test", contextLength: 128000, description: "Catalog fixture", inputModalities: ["text", "image"], outputModalities: ["text"], maxCompletionTokens: 4096 }] });
       expect(fetchImpl.mock.calls[0][1]?.headers).toEqual(expect.objectContaining({ authorization: "Bearer sk-or-secret" }));
       expect(JSON.stringify(store.getModels())).not.toContain("sk-or-secret");
     } finally { rmSync(directory, { recursive: true, force: true }); }

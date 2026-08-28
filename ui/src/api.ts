@@ -1,4 +1,4 @@
-import type { AccessKey, AccessKeySecret, DesiredModel, Endpoint, FilterPreview, ModelSummary, ProviderFilterConfig, ProviderFilterCondition, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
+import type { AccessKey, AccessKeySecret, CatalogCache, DesiredModel, Endpoint, FilterPreview, ModelSummary, ProviderFilterConfig, ProviderFilterCondition, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
 import type { AccessKeyRoutingData, KeyModelRouting } from "./AccessKeyRouting";
 
 type ApiError = { error?: { message?: string } };
@@ -17,7 +17,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   status: () => request<{ proxy: { running: boolean }; openrouter: { configured: boolean }; catalog: { modelCount: number; stale: boolean } }>("/status"),
-  models: (query = "") => request<{ items: ModelSummary[]; total: number }>(`/models${query ? `?q=${encodeURIComponent(query)}` : ""}`),
+  models: (query = "") => request<{ items: ModelSummary[]; total: number; cache?: CatalogCache }>(`/models${query ? `?q=${encodeURIComponent(query)}` : ""}`),
   refreshModels: () => request<unknown>("/models/refresh", { method: "POST" }),
   model: (id: string) => request<{ model: ModelSummary; policy: ProviderPolicy }>(`/models/${encodeURIComponent(id)}`),
   endpoints: (id: string) => request<{ items: Endpoint[] }>(`/models/${encodeURIComponent(id)}/endpoints`),

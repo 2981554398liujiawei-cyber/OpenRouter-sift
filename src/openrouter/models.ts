@@ -1,15 +1,7 @@
 import { z } from "zod";
 
-const nullableUnknown = z.unknown().nullable().optional().transform((value) => value ?? null);
 const modelSchema = z.object({
   id: z.string(),
-  canonical_slug: z.string().nullable().optional(),
-  name: z.string().nullable().optional(),
-  context_length: z.number().nullable().optional(),
-  pricing: nullableUnknown,
-  architecture: nullableUnknown,
-  supported_parameters: z.array(z.string()).nullable().optional(),
-  created: z.number().nullable().optional(),
 }).passthrough();
 
 const modelsResponseSchema = z.object({ data: z.array(modelSchema) }).passthrough();
@@ -23,6 +15,10 @@ export interface ModelDto {
   architecture: unknown | null;
   supportedParameters: string[] | null;
   created: number | null;
+  description: string | null;
+  inputModalities: string[] | null;
+  outputModalities: string[] | null;
+  maxCompletionTokens: number | null;
 }
 
 export interface ParsedModels { models: ModelDto[]; raw: unknown; }
@@ -31,16 +27,30 @@ export function parseModelsResponse(raw: unknown): ParsedModels {
   const parsed = modelsResponseSchema.safeParse(raw);
   if (!parsed.success) throw new Error("OpenRouter models response has an invalid data array");
   return {
-    models: parsed.data.data.map((model) => ({
-      id: model.id,
-      canonicalSlug: model.canonical_slug ?? null,
-      name: model.name ?? null,
-      contextLength: model.context_length ?? null,
-      pricing: model.pricing,
-      architecture: model.architecture,
-      supportedParameters: model.supported_parameters ?? null,
-      created: model.created ?? null,
-    })),
+    models: parsed.data.data.map((model) => {
+      const record = model as Record<string, unknown>;
+      const architecture = objectOrNull(record.architecture);
+      const topProvider = objectOrNull(record.top_provider);
+      return {
+        id: model.id,
+        canonicalSlug: stringOrNull(record.canonical_slug),
+        name: stringOrNull(record.name),
+        contextLength: numberOrNull(record.context_length),
+        pricing: record.pricing ?? null,
+        architecture: record.architecture ?? null,
+        supportedParameters: stringsOrNull(record.supported_parameters),
+        created: numberOrNull(record.created),
+        description: stringOrNull(record.description),
+        inputModalities: stringsOrNull(architecture?.input_modalities),
+        outputModalities: stringsOrNull(architecture?.output_modalities),
+        maxCompletionTokens: numberOrNull(topProvider?.max_completion_tokens),
+      };
+    }),
     raw,
   };
 }
+
+function stringOrNull(value: unknown): string | null { return typeof value === "string" ? value : null; }
+function numberOrNull(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
+function stringsOrNull(value: unknown): string[] | null { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : null; }
+function objectOrNull(value: unknown): Record<string, unknown> | null { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { DesiredModelDetail } from "./DesiredModelDetail";
 import { AccessKeyRouting } from "./AccessKeyRouting";
-import type { AccessKey, AccessKeySecret, DesiredModel, Endpoint, ModelSummary, PolicyMode, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
+import { AllModelsPage } from "./AllModelsPage";
+import type { AccessKey, AccessKeySecret, CatalogCache, DesiredModel, Endpoint, ModelSummary, PolicyMode, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
 
 type Page = "models" | "desired" | "keys" | "policies" | "settings" | "requests";
 
@@ -39,25 +40,26 @@ export function App() {
   const [page, setPage] = useState<Page>("models");
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [desiredModels, setDesiredModels] = useState<DesiredModel[]>([]);
-  const [query, setQuery] = useState("");
+  const [catalogCache, setCatalogCache] = useState<CatalogCache | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDesired, setSelectedDesired] = useState(false);
   const [status, setStatus] = useState<{ proxy: { running: boolean }; openrouter: { configured: boolean } } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const loadModels = async (nextQuery = query) => {
+  const loadModels = async () => {
     try {
       setError(null);
-      const [nextModels, nextStatus] = await Promise.all([api.models(nextQuery), api.status()]);
+      const [nextModels, nextStatus] = await Promise.all([api.models(), api.status()]);
       const nextDesired = typeof api.desiredModels === "function" ? await api.desiredModels().catch(() => ({ items: [] })) : { items: [] };
       setModels(nextModels.items);
+      setCatalogCache(nextModels.cache ?? null);
       setStatus(nextStatus);
       setDesiredModels(Array.isArray(nextDesired) ? nextDesired : Array.isArray(nextDesired?.items) ? nextDesired.items : []);
     } catch (err) { setError((err as Error).message); }
   };
 
-  useEffect(() => { void loadModels(""); }, []);
+  useEffect(() => { void loadModels(); }, []);
 
   const refreshModels = async () => {
     try {
@@ -82,7 +84,7 @@ export function App() {
       </div>
     </header>
     {(notice || error) && <div className={error ? "message error" : "message"}>{error ?? notice}<button aria-label="Dismiss message" onClick={() => { setError(null); setNotice(null); }}>×</button></div>}
-    {selectedId ? selectedDesired ? <DesiredModelDetail modelId={selectedId} models={models} onBack={() => { setSelectedId(null); setSelectedDesired(false); }} setNotice={setNotice} setError={setError} /> : <ModelDetail modelId={selectedId} onBack={() => setSelectedId(null)} onSaved={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "models" ? <ModelsPage models={models} desired={desiredModels} query={query} setQuery={setQuery} loadModels={loadModels} refreshModels={refreshModels} onOpen={openModel} onDesiredChange={() => void loadModels()} setError={setError} /> : page === "desired" ? <DesiredModelsPage models={models} desired={desiredModels} onChanged={() => void loadModels()} onOpen={(id) => { setSelectedId(id); setSelectedDesired(true); }} setNotice={setNotice} setError={setError} /> : page === "keys" ? <AccessKeysPage desired={desiredModels} setNotice={setNotice} setError={setError} /> : page === "policies" ? <PoliciesPage onOpen={openModel} setNotice={setNotice} setError={setError} /> : page === "settings" ? <SettingsPage setNotice={setNotice} setError={setError} /> : <RequestsPage setNotice={setNotice} setError={setError} />}
+    {selectedId ? selectedDesired ? <DesiredModelDetail modelId={selectedId} models={models} onBack={() => { setSelectedId(null); setSelectedDesired(false); }} setNotice={setNotice} setError={setError} /> : <ModelDetail modelId={selectedId} onBack={() => setSelectedId(null)} onSaved={() => void loadModels()} setNotice={setNotice} setError={setError} /> : page === "models" ? <AllModelsPage models={models} desired={desiredModels} cache={catalogCache} refreshModels={refreshModels} onOpen={openModel} onDesiredChange={() => void loadModels()} setError={setError} /> : page === "desired" ? <DesiredModelsPage models={models} desired={desiredModels} onChanged={() => void loadModels()} onOpen={(id) => { setSelectedId(id); setSelectedDesired(true); }} setNotice={setNotice} setError={setError} /> : page === "keys" ? <AccessKeysPage desired={desiredModels} setNotice={setNotice} setError={setError} /> : page === "policies" ? <PoliciesPage onOpen={openModel} setNotice={setNotice} setError={setError} /> : page === "settings" ? <SettingsPage setNotice={setNotice} setError={setError} /> : <RequestsPage setNotice={setNotice} setError={setError} />}
   </main>;
 }
 
@@ -127,19 +129,21 @@ function SecretModal({ value, onClose }: { value: AccessKeySecret; onClose: () =
 function ModelDetail({ modelId, onBack, onSaved, setNotice, setError }: { modelId: string; onBack: () => void; onSaved: () => void; setNotice: (value: string) => void; setError: (value: string) => void }) {
   const [model, setModel] = useState<ModelSummary | null>(null);
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
   const [policy, setPolicy] = useState<ProviderPolicy>(emptyPolicy);
   const [loading, setLoading] = useState(true);
   const load = async () => {
-    try { setLoading(true); const [detail, endpointResult] = await Promise.all([api.model(modelId), api.endpoints(modelId)]); setModel(detail.model); setPolicy(candidateFrom(detail.policy)); setEndpoints(endpointResult.items); } catch (err) { setError((err as Error).message); } finally { setLoading(false); }
+    try { setLoading(true); const [detail, endpointResult] = await Promise.all([api.model(modelId), api.endpoints(modelId)]); setModel(detail.model); setPolicy(candidateFrom(detail.policy)); setEndpoints(endpointResult.items); setProvidersLoaded(true); } catch (err) { setError((err as Error).message); } finally { setLoading(false); }
   };
   useEffect(() => { void load(); }, [modelId]);
-  const refresh = async () => { try { await api.refreshEndpoints(modelId); await load(); setNotice("Provider endpoints refreshed."); } catch (err) { setError((err as Error).message); } };
+  const loadProviders = async (refresh = false) => { try { const result = refresh ? (await api.refreshEndpoints(modelId), await api.endpoints(modelId)) : await api.endpoints(modelId); setEndpoints(result.items); setProvidersLoaded(true); if (refresh) setNotice("Provider endpoints refreshed."); } catch (err) { setError((err as Error).message); } };
   const providerOptions = useMemo(() => endpoints.flatMap((endpoint) => endpoint.providerRoutingId ? [{ id: endpoint.providerRoutingId, name: endpoint.providerName ?? endpoint.providerRoutingId }] : []), [endpoints]);
   if (loading) return <section className="page">Loading model details…</section>;
   if (!model) return <section className="page"><button className="back" onClick={onBack}>← Models</button><EmptyCatalog /></section>;
-  return <section className="page"><button className="back" onClick={onBack}>← Models</button><div className="page-heading detail-heading"><div><p className="eyebrow">Model control</p><h1>{model.name || model.id}</h1><code>{model.id}</code></div><button className="button secondary" onClick={() => void refresh()}>Refresh endpoints</button></div>
+  return <section className="page"><button className="back" onClick={onBack}>← Models</button><div className="page-heading detail-heading"><div><p className="eyebrow">Model control</p><h1>{model.name || model.id}</h1><code>{model.creator ?? "Unknown creator"} · {model.id}</code></div>{providersLoaded && <button className="button secondary" onClick={() => void loadProviders(true)}>Refresh providers</button>}</div>
     <div className="stats"><Stat label="Context" value={model.contextLength ? model.contextLength.toLocaleString() : "—"} /><Stat label="Input" value={perMillion(model.pricing, "prompt")} /><Stat label="Output" value={perMillion(model.pricing, "completion")} /></div>
-    <section className="panel"><div className="panel-title"><div><h2>Provider endpoints</h2><p>Metrics are OpenRouter data. Missing values stay unavailable.</p></div></div><EndpointTable endpoints={endpoints} /></section>
+    <section className="panel"><div className="panel-title"><div><h2>Capabilities</h2><p>{model.description || "Model metadata from the local OpenRouter catalog."}</p></div></div><div className="catalog-badges">{(model.inputModalities ?? []).map((item) => <i key={item}>Input: {item}</i>)}{(model.outputModalities ?? []).map((item) => <i key={item}>Output: {item}</i>)}{(model.supportedParameters ?? []).map((item) => <i key={item}>{item}</i>)}</div></section>
+    <section className="panel"><div className="panel-title"><div><h2>Provider endpoints</h2><p>Provider pricing and live telemetry load only when requested.</p></div>{!providersLoaded && <button className="button secondary" onClick={() => void loadProviders()}>Load provider details</button>}</div>{providersLoaded ? <EndpointTable endpoints={endpoints} /> : <p className="muted">No provider endpoint data has been loaded for this view.</p>}</section>
     <PolicyEditor modelId={modelId} options={providerOptions} policy={policy} setPolicy={setPolicy} onSaved={() => { onSaved(); setNotice("Policy saved. The proxy will use it for the next request."); }} setNotice={setNotice} setError={setError} />
   </section>;
 }

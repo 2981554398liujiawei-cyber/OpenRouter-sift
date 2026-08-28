@@ -354,9 +354,10 @@ export function startServer(cfg: ShimConfig): http.Server {
             const items = snapshot.data.filter((model) => {
               const policy = modelPolicies.get(model.id);
               const summary = policy?.mode ?? "inherit";
-              return (!query || model.id.toLowerCase().includes(query) || model.name?.toLowerCase().includes(query)) && (!filter || summary === filter);
-            }).map((model) => ({ id: model.id, name: model.name, contextLength: model.contextLength, pricing: model.pricing, policySummary: modelPolicies.get(model.id)?.mode ?? "inherit" }));
-            return writeJson(res, 200, { items, total: items.length, cache: { fetchedAt: snapshot.fetchedAt, stale: snapshot.state !== "fresh" } });
+              const creator = model.id.split("/")[0] ?? "";
+              return (!query || [model.id, model.name, model.description, creator].some((value) => value?.toLowerCase().includes(query))) && (!filter || summary === filter);
+            }).map((model) => ({ ...model, creator: model.id.split("/")[0] ?? null, policySummary: modelPolicies.get(model.id)?.mode ?? "inherit" }));
+            return writeJson(res, 200, { items, total: items.length, cache: { fetchedAt: snapshot.fetchedAt, stale: snapshot.state !== "fresh", available: Boolean(snapshot.fetchedAt) } });
           }
           if (url.pathname === "/api/models/refresh" && req.method === "POST") return writeJson(res, 200, await metadataCatalog.syncModels(true));
           const desiredModelMatch = url.pathname.match(/^\/api\/desired-models\/([^/]+)$/);
@@ -547,7 +548,7 @@ export function startServer(cfg: ShimConfig): http.Server {
             if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
             const model = metadataCatalog.getModelsSnapshot().data.find((item) => item.id === modelId);
             if (!model) return writeError(res, 404, "Model not found in local catalog", "MODEL_NOT_FOUND");
-            return writeJson(res, 200, { model, policy: policyForApi(modelPolicies.get(modelId)) });
+            return writeJson(res, 200, { model: { ...model, creator: model.id.split("/")[0] ?? null, policySummary: modelPolicies.get(model.id)?.mode ?? "inherit" }, policy: policyForApi(modelPolicies.get(modelId)) });
           }
           if (url.pathname === "/api/policies" && req.method === "GET") {
             return writeJson(res, 200, { items: Object.entries(modelPolicies.list()).map(([modelId, policy]) => ({ modelId, ...policyForApi(policy) })) });

@@ -12,10 +12,21 @@ export interface ProviderPolicy {
 export interface ModelSummary {
   id: string;
   name: string | null;
+  creator?: string | null;
   contextLength: number | null;
   pricing: unknown | null;
   policySummary: PolicyMode;
+  canonicalSlug?: string | null;
+  architecture?: unknown | null;
+  supportedParameters?: string[] | null;
+  created?: number | null;
+  description?: string | null;
+  inputModalities?: string[] | null;
+  outputModalities?: string[] | null;
+  maxCompletionTokens?: number | null;
 }
+
+export interface CatalogCache { fetchedAt: string | null; stale: boolean; available: boolean; }
 
 export interface Percentiles { p50: number | null; p75: number | null; p90: number | null; p99: number | null; }
 
