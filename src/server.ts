@@ -455,15 +455,18 @@ export function startServer(cfg: ShimConfig): http.Server {
             try { modelId = decodeURIComponent(accessKeyOverridePreviewMatch[2]); } catch { return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID"); }
             if (!modelId || !key.allowedModels.includes(modelId) || !desiredModels.has(modelId)) return writeError(res, 422, "Model must be allowed for this Access Key", "MODEL_NOT_ALLOWED_FOR_KEY");
             try {
-              const previewBody = await readJsonBody(req, cfg.max_body_bytes) as { candidateOverride?: unknown };
+              const previewBody = await readJsonBody(req, cfg.max_body_bytes) as { candidateOverride?: unknown; incomingProviderPolicy?: unknown };
               const candidateOverride = validateModelOverrides({ [modelId]: previewBody.candidateOverride ?? previewBody }, key.allowedModels)[modelId];
               const desired = desiredModels.get(modelId);
               const snapshot = metadataCatalog.getModelEndpointsSnapshot(modelId);
+              if (desired?.providerFilter?.enabled && !snapshot.available) return writeError(res, 503, "Provider filter data is unavailable", "FILTER_DATA_UNAVAILABLE");
+              if (desired?.providerFilter?.enabled && !isTelemetryFresh(snapshot.fetchedAt, desired.providerFilter.maxTelemetryAgeMs)) return writeError(res, 503, "Provider filter data is stale", "FILTER_DATA_STALE");
               const hardResult = desired?.providerFilter?.enabled && snapshot.available
                 ? evaluateProviderEndpoints(snapshot.data, desired.providerFilter, { modelId, metadataFetchedAt: snapshot.fetchedAt, metadataState: isTelemetryFresh(snapshot.fetchedAt, desired.providerFilter.maxTelemetryAgeMs) ? "fresh" : "stale" })
                 : null;
-              const resolution = resolveManagedProviderRouting({ availableRoutingIds: snapshot.available ? snapshot.data.map((endpoint) => endpoint.providerRoutingId).filter(Boolean) : null, hardFilterEligibleIds: hardResult?.eligibleRoutingIds ?? null, accessKeyOverride: candidateOverride, globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(modelId), incomingProviderPolicy: undefined, mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
-              return writeJson(res, 200, { hardFilter: { eligible: hardResult?.eligibleRoutingIds ?? null }, accessKeyOverride: { eligible: resolution.trace.accessKeyOverride }, modelPolicy: { eligible: resolution.trace.modelPolicy }, incoming: { eligible: null }, final: { eligible: resolution.finalEligibleRoutingIds, providerPolicy: resolution.finalProviderPolicy }, trace: resolution.trace });
+              const incomingProviderPolicy = previewBody.incomingProviderPolicy === undefined ? undefined : ProviderPolicySchema.parse(previewBody.incomingProviderPolicy);
+              const resolution = resolveManagedProviderRouting({ availableRoutingIds: snapshot.available ? snapshot.data.map((endpoint) => endpoint.providerRoutingId).filter(Boolean) : null, hardFilterEligibleIds: hardResult?.eligibleRoutingIds ?? null, accessKeyOverride: candidateOverride, globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(modelId), incomingProviderPolicy, mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
+              return writeJson(res, 200, { hardFilter: { eligible: hardResult?.eligibleRoutingIds ?? null }, accessKeyOverride: { eligible: resolution.trace.accessKeyOverride }, modelPolicy: { eligible: resolution.trace.modelPolicy }, incoming: { eligible: resolution.trace.incoming }, final: { eligible: resolution.finalEligibleRoutingIds, providerPolicy: resolution.finalProviderPolicy }, trace: resolution.trace });
             } catch (err: any) { return writeError(res, 422, err?.message ?? "Invalid model override", "INVALID_MODEL_OVERRIDE"); }
           }
           if (accessKeyOverrideModelMatch) {

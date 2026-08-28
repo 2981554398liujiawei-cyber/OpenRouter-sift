@@ -34,8 +34,9 @@ describe("provider filter API and proxy", () => it("previews and hard-limits man
     expect((await nativeFetch(`${base}/api/access-keys/${key.id}/models/demo%2Fmodel/override`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ providerMode: "allowlist", providers: ["good"], providerOrder: ["good"], allowFallbacks: false }) })).status).toBe(200);
     const savedOverride = await (await nativeFetch(`${base}/api/access-keys/${key.id}/models/demo%2Fmodel/override`)).json() as any;
     expect(savedOverride.override).toMatchObject({ providerMode: "allowlist", providers: ["good"] });
-    const overridePreview = await (await nativeFetch(`${base}/api/access-keys/${key.id}/models/demo%2Fmodel/override/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ candidateOverride: { providerMode: "allowlist", providers: ["good"] } }) })).json() as any;
+    const overridePreview = await (await nativeFetch(`${base}/api/access-keys/${key.id}/models/demo%2Fmodel/override/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ candidateOverride: { providerMode: "allowlist", providers: ["good"] }, incomingProviderPolicy: { only: ["good", "slow"], max_price: { prompt: 0.2 }, quantizations: ["fp16"], require_parameters: true } }) })).json() as any;
     expect(overridePreview.final.eligible).toEqual(["good"]);
+    expect(overridePreview.final.providerPolicy).toMatchObject({ only: ["good"], max_price: { prompt: 0.2 }, quantizations: ["fp16"], require_parameters: true });
     for (const [path, body] of [
       ["/v1/chat/completions", { model: "demo/model", messages: [] }],
       ["/v1/responses", { model: "demo/model", input: "x" }],
