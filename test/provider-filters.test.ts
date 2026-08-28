@@ -63,4 +63,16 @@ describe("provider filter engine", () => {
     expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [{ ...base.conditions[0], field: "uptime.5m", value: 101 }] }).success).toBe(false);
     expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [base.conditions[0], base.conditions[0]] }).success).toBe(false);
   });
+
+  it("enforces meaningful filter bounds and condition value types", () => {
+    const base = { enabled: true, mode: "all" as const, maxTelemetryAgeMs: 30_000, updatedAt: "now", conditions: [{ id: "a", field: "pricing.prompt", operator: "lte" as const, value: 0, enabled: true }] };
+    expect(providerFilterConfigSchema.safeParse({ ...base, maxTelemetryAgeMs: 29_999 }).success).toBe(false);
+    expect(providerFilterConfigSchema.safeParse({ ...base, maxTelemetryAgeMs: 86_400_000 }).success).toBe(true);
+    expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [{ ...base.conditions[0], field: "performance.throughput.p50", value: -1 }] }).success).toBe(false);
+    expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [{ ...base.conditions[0], field: "performance.latency.p50", value: -1 }] }).success).toBe(false);
+    expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [{ ...base.conditions[0], operator: "eq", value: "nope" }] }).success).toBe(false);
+    expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [{ ...base.conditions[0], field: "context.length", value: 1.5 }] }).success).toBe(false);
+    expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [{ id: "providers", field: "provider.routingId", operator: "in", value: ["demo", 1], enabled: true }] }).success).toBe(false);
+    expect(providerFilterConfigSchema.safeParse({ ...base, conditions: [{ id: "providers", field: "provider.routingId", operator: "in", value: [], enabled: true }] }).success).toBe(false);
+  });
 });
