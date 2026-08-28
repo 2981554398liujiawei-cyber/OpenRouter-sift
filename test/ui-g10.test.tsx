@@ -160,6 +160,34 @@ describe("G10 navigation and information architecture", () => {
     });
   });
 
+  it("never labels a merely-configured upstream key as Connected (G11 status wording)", async () => {
+    const now = new Date().toISOString();
+    // last successful sync → Metadata OK
+    install((url) => url.endsWith("/status") ? { proxy: { running: true }, openrouter: { configured: true, lastSuccessfulMetadataRequestAt: now, lastError: null }, catalog: { modelCount: 1, fetchedAt: now, stale: false } } : baseFixtures(url, "GET"));
+    render(<App />);
+    expect(await screen.findByText(/Metadata OK/)).toBeTruthy();
+    expect(screen.queryByText(/Connected/)).toBeNull();
+    cleanup();
+    // metadata failure → Metadata issue (not Connected)
+    install((url) => url.endsWith("/status") ? { proxy: { running: true }, openrouter: { configured: true, lastSuccessfulMetadataRequestAt: null, lastError: "OpenRouter unreachable" } } : baseFixtures(url, "GET"));
+    render(<App />);
+    expect(await screen.findByText(/Metadata issue/)).toBeTruthy();
+    expect(screen.queryByText(/Connected/)).toBeNull();
+    cleanup();
+    // configured but never synced → Key configured (not Connected)
+    install(baseFixtures);
+    render(<App />);
+    await screen.findByRole("heading", { name: "All Models" });
+    expect(screen.getByText(/Key configured/)).toBeTruthy();
+    expect(screen.queryByText(/Connected/)).toBeNull();
+    cleanup();
+    // no key → API key needed
+    install((url) => url.endsWith("/status") ? { proxy: { running: true }, openrouter: { configured: false, lastSuccessfulMetadataRequestAt: null, lastError: null } } : baseFixtures(url, "GET"));
+    render(<App />);
+    expect(await screen.findByText(/API key needed/)).toBeTruthy();
+    expect(screen.queryByText(/Connected/)).toBeNull();
+  });
+
   it("keeps model detail breadcrumbs and the Providers lazy-fetch flow intact", async () => {
     install(baseFixtures);
     render(<App />);

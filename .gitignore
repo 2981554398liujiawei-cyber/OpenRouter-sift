@@ -9,5 +9,11 @@ coverage/
 openrouter-control-requests.json
 openrouter-control-desired-models.json
 openrouter-control-access-keys.json
+openrouter-control-metadata.json
+openrouter-control-policies.json
+openrouter-control-settings.json
+openrouter-control-*.json
+.tmp/
+tmp/
 .vscode/
 .idea/

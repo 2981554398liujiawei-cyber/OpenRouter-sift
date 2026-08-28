@@ -16,7 +16,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  status: () => request<{ proxy: { running: boolean }; openrouter: { configured: boolean }; catalog: { modelCount: number; stale: boolean } }>("/status"),
+  status: () => request<{ proxy: { running: boolean; host?: string; port?: number }; openrouter: { configured: boolean; lastSuccessfulMetadataRequestAt?: string | null; lastError?: string | null }; catalog?: { modelCount: number; fetchedAt: string | null; stale: boolean }; version?: string }>("/status"),
   models: (query = "") => request<{ items: ModelSummary[]; total: number; cache?: CatalogCache }>(`/models${query ? `?q=${encodeURIComponent(query)}` : ""}`),
   refreshModels: () => request<unknown>("/models/refresh", { method: "POST" }),
   model: (id: string) => request<{ model: ModelSummary; policy: ProviderPolicy }>(`/models/${encodeURIComponent(id)}`),

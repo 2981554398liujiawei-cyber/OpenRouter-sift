@@ -26,7 +26,7 @@ export function App() {
   const [catalogCache, setCatalogCache] = useState<CatalogCache | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDesired, setSelectedDesired] = useState(false);
-  const [status, setStatus] = useState<{ proxy: { running: boolean }; openrouter: { configured: boolean } } | null>(null);
+  const [status, setStatus] = useState<{ proxy: { running: boolean; host?: string; port?: number }; openrouter: { configured: boolean; lastSuccessfulMetadataRequestAt?: string | null; lastError?: string | null }; catalog?: { modelCount: number; fetchedAt: string | null; stale: boolean }; version?: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,6 +59,16 @@ export function App() {
   };
 
   const go = (next: Page) => { setSelectedId(null); setSelectedDesired(false); setPage(next); };
+
+  // "configured" only means an upstream key exists — it never implies a verified
+  // live connection, so the label must reflect actual metadata sync state.
+  let openrouterStatus: { label: string; className: string; detail?: string; title?: string };
+  if (!status?.openrouter.configured) openrouterStatus = { label: "API key needed", className: "status warn", title: "Set OPENROUTER_API_KEY to reach OpenRouter." };
+  else if (status.openrouter.lastError) openrouterStatus = { label: "Metadata issue", className: "status warn", detail: "last sync failed", title: status.openrouter.lastError };
+  else if (status.openrouter.lastSuccessfulMetadataRequestAt) {
+    const ageMinutes = Math.floor((Date.now() - Date.parse(status.openrouter.lastSuccessfulMetadataRequestAt)) / 60000);
+    openrouterStatus = { label: "Metadata OK", className: "status good", detail: Number.isFinite(ageMinutes) && ageMinutes >= 0 ? `last sync ${ageMinutes === 0 ? "<1m" : `${ageMinutes}m`} ago` : undefined };
+  } else openrouterStatus = { label: "Key configured", className: "status good", title: "Upstream key configured; no metadata sync yet." };
   const openModel = (id: string) => { setSelectedId(id); setSelectedDesired(false); setPage("models"); setError(null); };
   const openDesiredModel = (id: string) => { setSelectedId(id); setSelectedDesired(true); setPage("desired"); setError(null); };
 
@@ -69,7 +79,7 @@ export function App() {
         {navItems.map((item) => <button key={item.id} className={page === item.id && !selectedId ? "nav-active" : ""} aria-current={page === item.id && !selectedId ? "page" : undefined} onClick={() => go(item.id)}>{item.label}</button>)}
       </nav>
       <div className="sidebar-status" aria-label="Service status">
-        <span className={status?.openrouter.configured ? "status good" : "status warn"}>OpenRouter {status?.openrouter.configured ? "Connected" : "API key needed"}</span>
+        <span className={openrouterStatus.className} title={openrouterStatus.title}>OpenRouter {openrouterStatus.label}{openrouterStatus.detail ? <small> · {openrouterStatus.detail}</small> : null}</span>
         <span className={status?.proxy.running ? "status good" : "status"}>Proxy {status?.proxy.running ? "Running" : "Unknown"}</span>
       </div>
     </aside>
