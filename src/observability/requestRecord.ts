@@ -1,5 +1,7 @@
 import type { ProviderPolicy } from "../config.js";
 import type { ProviderFilterConfig } from "../providerFilters/types.js";
+import type { AccessKeyModelOverride } from "../access/schema.js";
+import type { ManagedRoutingTrace } from "../policy/managedRouting.js";
 
 export type RequestProtocol = "anthropic_messages" | "chat_completions" | "responses";
 export type EnrichmentStatus = "pending" | "success" | "failed" | "unavailable";
@@ -26,6 +28,8 @@ export interface RequestRecord {
   providerFilterMetadataFetchedAt: string | null;
   providerFilterMetadataAgeMs: number | null;
   providerFilterStatus: "fresh" | "stale" | "unavailable" | null;
+  accessKeyModelOverrideSnapshot: AccessKeyModelOverride | null;
+  managedRoutingTrace: ManagedRoutingTrace | null;
   actualProviderName: string | null;
   actualProviderRoutingId: string | null;
   promptTokens: number | null;
@@ -67,6 +71,8 @@ export function newRequestRecord(id: string, protocol: RequestProtocol): Request
     providerFilterMetadataFetchedAt: null,
     providerFilterMetadataAgeMs: null,
     providerFilterStatus: null,
+    accessKeyModelOverrideSnapshot: null,
+    managedRoutingTrace: null,
     actualProviderName: null,
     actualProviderRoutingId: null,
     promptTokens: null,

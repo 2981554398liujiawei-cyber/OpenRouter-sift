@@ -21,7 +21,9 @@ import { RequestTracker } from "./observability/requestTracker.js";
 import type { RequestProtocol } from "./observability/requestRecord.js";
 import { JsonDesiredModelStore } from "./access/desiredModelStore.js";
 import { JsonAccessKeyStore, type AccessKey } from "./access/accessKeyStore.js";
+import { validateModelOverrides, type ModelOverrides } from "./access/schema.js";
 import { evaluateProviderEndpoints, isTelemetryFresh, providerFilterConfigSchema, type ProviderFilterConfig } from "./providerFilters/index.js";
+import { resolveManagedProviderRouting } from "./policy/managedRouting.js";
 
 const OPENROUTER_BASE_V1 = "https://openrouter.ai/api/v1";
 // In the bundled CLI, the UI lives beside `dist/server`, not beside the caller's cwd.
@@ -409,6 +411,10 @@ export function startServer(cfg: ShimConfig): http.Server {
             return writeJson(res, 200, { modelId, deleted: desiredModels.remove(modelId), removedFromKeys });
           }
           const accessKeyMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)$/);
+          const accessKeyOverridesMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)\/model-overrides$/);
+          const accessKeyOverridesPreviewMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)\/model-overrides\/preview$/);
+          const accessKeyOverrideModelMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)\/models\/([^/]+)\/override$/);
+          const accessKeyOverridePreviewMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)\/models\/([^/]+)\/override\/preview$/);
           const validateAllowedModels = (models: unknown): string[] | null => {
             if (!Array.isArray(models) || !models.every((model) => typeof model === "string")) return null;
             const unique = [...new Set(models)];
@@ -417,13 +423,92 @@ export function startServer(cfg: ShimConfig): http.Server {
           if (url.pathname === "/api/access-keys" && req.method === "GET") return writeJson(res, 200, { items: accessKeys.list().map(accessKeyForApi) });
           if (url.pathname === "/api/access-keys" && req.method === "POST") {
             try {
-              const input = await readJsonBody(req, cfg.max_body_bytes) as { name?: unknown; allowedModels?: unknown };
+               const input = await readJsonBody(req, cfg.max_body_bytes) as { name?: unknown; allowedModels?: unknown; modelOverrides?: unknown };
               if (typeof input.name !== "string") return writeError(res, 400, "name is required", "INVALID_ACCESS_KEY");
-              const allowedModels = validateAllowedModels(input.allowedModels);
-              if (!allowedModels) return writeError(res, 422, "Every allowed model must be in Desired Models", "MODEL_NOT_DESIRED");
-              const created = accessKeys.create(input.name, allowedModels);
+               const allowedModels = validateAllowedModels(input.allowedModels);
+               if (!allowedModels) return writeError(res, 422, "Every allowed model must be in Desired Models", "MODEL_NOT_DESIRED");
+               let modelOverrides: ModelOverrides = {};
+               if (input.modelOverrides !== undefined) {
+                 try { modelOverrides = validateModelOverrides(input.modelOverrides, allowedModels); }
+                 catch (err: any) { return writeError(res, 422, err?.message ?? "Invalid model overrides", "INVALID_MODEL_OVERRIDES"); }
+               }
+               const created = accessKeys.create(input.name, allowedModels, modelOverrides);
               return writeJson(res, 201, { ...accessKeyForApi(created.record), secret: created.secret });
             } catch (err: any) { return writeError(res, 400, err?.message ?? "Invalid access key", "INVALID_ACCESS_KEY"); }
+          }
+          if (accessKeyOverridesMatch && req.method === "GET") {
+            const key = accessKeys.get(accessKeyOverridesMatch[1]);
+            return key ? writeJson(res, 200, { id: key.id, modelOverrides: key.modelOverrides ?? {} }) : writeError(res, 404, "Access key not found", "ACCESS_KEY_NOT_FOUND");
+          }
+          if (accessKeyOverridesPreviewMatch && req.method === "POST") {
+            const key = accessKeys.get(accessKeyOverridesPreviewMatch[1]);
+            if (!key) return writeError(res, 404, "Access key not found", "ACCESS_KEY_NOT_FOUND");
+            try {
+              const input = await readJsonBody(req, cfg.max_body_bytes) as { modelOverrides?: unknown };
+              return writeJson(res, 200, { id: key.id, modelOverrides: validateModelOverrides(input.modelOverrides ?? {}, key.allowedModels) });
+            } catch (err: any) { return writeError(res, 422, err?.message ?? "Invalid model overrides", "INVALID_MODEL_OVERRIDES"); }
+          }
+          if (accessKeyOverridePreviewMatch && req.method === "POST") {
+            const key = accessKeys.get(accessKeyOverridePreviewMatch[1]);
+            if (!key) return writeError(res, 404, "Access key not found", "ACCESS_KEY_NOT_FOUND");
+            let modelId: string;
+            try { modelId = decodeURIComponent(accessKeyOverridePreviewMatch[2]); } catch { return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID"); }
+            if (!modelId || !key.allowedModels.includes(modelId) || !desiredModels.has(modelId)) return writeError(res, 422, "Model must be allowed for this Access Key", "MODEL_NOT_ALLOWED_FOR_KEY");
+            try {
+              const previewBody = await readJsonBody(req, cfg.max_body_bytes) as { candidateOverride?: unknown };
+              const candidateOverride = validateModelOverrides({ [modelId]: previewBody.candidateOverride ?? previewBody }, key.allowedModels)[modelId];
+              const desired = desiredModels.get(modelId);
+              const snapshot = metadataCatalog.getModelEndpointsSnapshot(modelId);
+              const hardResult = desired?.providerFilter?.enabled && snapshot.available
+                ? evaluateProviderEndpoints(snapshot.data, desired.providerFilter, { modelId, metadataFetchedAt: snapshot.fetchedAt, metadataState: isTelemetryFresh(snapshot.fetchedAt, desired.providerFilter.maxTelemetryAgeMs) ? "fresh" : "stale" })
+                : null;
+              const resolution = resolveManagedProviderRouting({ availableRoutingIds: snapshot.data.map((endpoint) => endpoint.providerRoutingId).filter(Boolean), hardFilterEligibleIds: hardResult?.eligibleRoutingIds ?? null, accessKeyOverride: candidateOverride, globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(modelId), incomingProviderPolicy: undefined });
+              return writeJson(res, 200, { hardFilter: { eligible: hardResult?.eligibleRoutingIds ?? null }, accessKeyOverride: { eligible: resolution.trace.accessKeyOverride }, modelPolicy: { eligible: resolution.trace.modelPolicy }, incoming: { eligible: null }, final: { eligible: resolution.finalEligibleRoutingIds, providerPolicy: resolution.finalProviderPolicy }, trace: resolution.trace });
+            } catch (err: any) { return writeError(res, 422, err?.message ?? "Invalid model override", "INVALID_MODEL_OVERRIDE"); }
+          }
+          if (accessKeyOverrideModelMatch) {
+            const key = accessKeys.get(accessKeyOverrideModelMatch[1]);
+            if (!key) return writeError(res, 404, "Access key not found", "ACCESS_KEY_NOT_FOUND");
+            let modelId: string;
+            try { modelId = decodeURIComponent(accessKeyOverrideModelMatch[2]); } catch { return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID"); }
+            if (!modelId || !key.allowedModels.includes(modelId) || !desiredModels.has(modelId)) return writeError(res, 422, "Model must be allowed for this Access Key", "MODEL_NOT_ALLOWED_FOR_KEY");
+            if (req.method === "GET") {
+              const snapshot = metadataCatalog.getModelEndpointsSnapshot(modelId);
+              const filter = desiredModels.get(modelId)?.providerFilter;
+              const hard = filter?.enabled && snapshot.available
+                ? evaluateProviderEndpoints(snapshot.data, filter, { modelId, metadataFetchedAt: snapshot.fetchedAt, metadataState: isTelemetryFresh(snapshot.fetchedAt, filter.maxTelemetryAgeMs) ? "fresh" : "stale" })
+                : null;
+              const eligible = new Set(hard?.eligibleRoutingIds ?? []);
+              return writeJson(res, 200, { id: key.id, modelId, override: key.modelOverrides?.[modelId] ?? null, mode: key.modelOverrides?.[modelId]?.providerMode ?? "inherit", providersSelected: key.modelOverrides?.[modelId]?.providers ?? [], providerOrder: key.modelOverrides?.[modelId]?.providerOrder ?? [], allowFallbacks: key.modelOverrides?.[modelId]?.allowFallbacks ?? false, providers: snapshot.data.map((endpoint) => ({ id: endpoint.providerRoutingId, name: endpoint.providerName, available: filter?.enabled ? eligible.has(endpoint.providerRoutingId) : true, status: filter?.enabled && !eligible.has(endpoint.providerRoutingId) ? "Excluded by Desired Model filter" : null })) });
+            }
+            if (req.method === "DELETE") {
+              const next = { ...(key.modelOverrides ?? {}) }; delete next[modelId];
+              accessKeys.update(key.id, { modelOverrides: next });
+              return writeJson(res, 200, { id: key.id, modelId, deleted: true });
+            }
+            if (req.method === "PUT") {
+              try {
+                const override = (await readJsonBody(req, cfg.max_body_bytes)) as unknown;
+                const parsed = validateModelOverrides({ [modelId]: override }, key.allowedModels)[modelId];
+                accessKeys.update(key.id, { modelOverrides: { ...(key.modelOverrides ?? {}), [modelId]: parsed } });
+                return writeJson(res, 200, { id: key.id, modelId, override: parsed });
+              } catch (err: any) { return writeError(res, 422, err?.message ?? "Invalid model override", "INVALID_MODEL_OVERRIDE"); }
+            }
+          }
+          if (accessKeyOverridesMatch && req.method === "PUT") {
+            const key = accessKeys.get(accessKeyOverridesMatch[1]);
+            if (!key) return writeError(res, 404, "Access key not found", "ACCESS_KEY_NOT_FOUND");
+            try {
+              const input = await readJsonBody(req, cfg.max_body_bytes) as { modelOverrides?: unknown };
+              const modelOverrides = validateModelOverrides(input.modelOverrides ?? {}, key.allowedModels);
+              return writeJson(res, 200, { id: key.id, modelOverrides: accessKeys.update(key.id, { modelOverrides }).modelOverrides });
+            } catch (err: any) { return writeError(res, 422, err?.message ?? "Invalid model overrides", "INVALID_MODEL_OVERRIDES"); }
+          }
+          if (accessKeyOverridesMatch && req.method === "DELETE") {
+            const key = accessKeys.get(accessKeyOverridesMatch[1]);
+            if (!key) return writeError(res, 404, "Access key not found", "ACCESS_KEY_NOT_FOUND");
+            accessKeys.update(key.id, { modelOverrides: {} });
+            return writeJson(res, 200, { id: key.id, modelOverrides: {}, deleted: true });
           }
           if (accessKeyMatch && req.method === "GET") {
             const key = accessKeys.get(accessKeyMatch[1]);
@@ -431,12 +516,19 @@ export function startServer(cfg: ShimConfig): http.Server {
           }
           if (accessKeyMatch && req.method === "PUT") {
             try {
-              const input = await readJsonBody(req, cfg.max_body_bytes) as { name?: unknown; allowedModels?: unknown; enabled?: unknown };
+               const input = await readJsonBody(req, cfg.max_body_bytes) as { name?: unknown; allowedModels?: unknown; enabled?: unknown; modelOverrides?: unknown };
               if (input.name !== undefined && typeof input.name !== "string") return writeError(res, 400, "Invalid name", "INVALID_ACCESS_KEY");
               if (input.enabled !== undefined && typeof input.enabled !== "boolean") return writeError(res, 400, "Invalid enabled flag", "INVALID_ACCESS_KEY");
               const allowedModels = input.allowedModels === undefined ? undefined : validateAllowedModels(input.allowedModels);
-              if (input.allowedModels !== undefined && !allowedModels) return writeError(res, 422, "Every allowed model must be in Desired Models", "MODEL_NOT_DESIRED");
-              const key = accessKeys.update(accessKeyMatch[1], { ...(input.name !== undefined ? { name: input.name } : {}), ...(allowedModels !== undefined ? { allowedModels } : {}), ...(input.enabled !== undefined ? { enabled: input.enabled } : {}) });
+               if (input.allowedModels !== undefined && !allowedModels) return writeError(res, 422, "Every allowed model must be in Desired Models", "MODEL_NOT_DESIRED");
+               const existing = accessKeys.get(accessKeyMatch[1]);
+               if (!existing) throw new Error("Access key not found");
+               let modelOverrides: ModelOverrides | undefined;
+               if (input.modelOverrides !== undefined) {
+                 try { modelOverrides = validateModelOverrides(input.modelOverrides, allowedModels ?? existing.allowedModels); }
+                 catch (err: any) { return writeError(res, 422, err?.message ?? "Invalid model overrides", "INVALID_MODEL_OVERRIDES"); }
+               }
+               const key = accessKeys.update(accessKeyMatch[1], { ...(input.name !== undefined ? { name: input.name } : {}), ...(allowedModels !== undefined ? { allowedModels } : {}), ...(input.enabled !== undefined ? { enabled: input.enabled } : {}), ...(modelOverrides !== undefined ? { modelOverrides } : {}) });
               return writeJson(res, 200, accessKeyForApi(key));
             } catch (err: any) { return writeError(res, err?.message === "Access key not found" ? 404 : 400, err?.message ?? "Invalid access key", err?.message === "Access key not found" ? "ACCESS_KEY_NOT_FOUND" : "INVALID_ACCESS_KEY"); }
           }
@@ -548,7 +640,7 @@ export function startServer(cfg: ShimConfig): http.Server {
               return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit(), desiredEndpointRefreshIntervalMs: controlSettings.desiredEndpointRefreshIntervalMs });
             } catch { return writeError(res, 400, "Invalid settings", "INVALID_SETTINGS"); }
           }
-          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/desired-models" || url.pathname === "/api/access-keys" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || desiredModelMatch || accessKeyMatch || policyMatch || requestDetailMatch;
+          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/desired-models" || url.pathname === "/api/access-keys" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || desiredModelMatch || accessKeyMatch || accessKeyOverridesMatch || accessKeyOverridesPreviewMatch || accessKeyOverrideModelMatch || accessKeyOverridePreviewMatch || policyMatch || requestDetailMatch;
           return writeError(res, knownRoute ? 405 : 404, knownRoute ? "Method not allowed" : "Management API endpoint not found", knownRoute ? "ERR_METHOD_NOT_ALLOWED" : "API_NOT_FOUND");
         } catch (err) {
           if (err instanceof OpenRouterMetadataError) return metadataError(err);
@@ -664,32 +756,62 @@ export function startServer(cfg: ShimConfig): http.Server {
 
         // Resolve global/model policy, then apply the configured incoming-request merge behavior.
         try {
-          const effectiveProviderPolicy = resolveProviderPolicy({ globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(body?.model), incomingPolicy: body?.provider, mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
-          requestTracker.update(observationId ?? "", { effectiveProviderPolicy: effectiveProviderPolicy ?? null });
-          body = applyResolvedProviderPolicy(body, {
-            globalPolicy: cfg.policy,
-            modelPolicy: modelPolicies.get(body?.model),
-            mergeMode: cfg.merge_mode,
-            softEnforceOnly: cfg._runtime.soft_enforce_only,
-          });
           const filter = desiredModels.get(typeof body?.model === "string" ? body.model : "")?.providerFilter;
-          if (filter?.enabled) {
+          if (managedAccessKey) {
+            const override = managedAccessKey.modelOverrides?.[body.model];
+            // Preserve the established managed-key behavior when this model has
+            // no filter and no key-specific routing restriction. G8 only needs
+            // an endpoint snapshot once it must calculate a provider set.
+            if (!filter?.enabled && (!override || override.providerMode === "inherit")) {
+              const effectiveProviderPolicy = resolveProviderPolicy({ globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(body?.model), incomingPolicy: body?.provider, mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
+              body = applyResolvedProviderPolicy(body, { globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(body?.model), mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
+              requestTracker.update(observationId ?? "", { effectiveProviderPolicy: effectiveProviderPolicy ?? null, accessKeyModelOverrideSnapshot: override ?? null });
+            } else {
             const endpointSnapshot = metadataCatalog.getModelEndpointsSnapshot(body.model);
-            const filterStatus = !endpointSnapshot.available ? "unavailable" : isTelemetryFresh(endpointSnapshot.fetchedAt, filter.maxTelemetryAgeMs) ? "fresh" : "stale";
-            const result = evaluateProviderEndpoints(endpointSnapshot.data, filter, { modelId: body.model, metadataFetchedAt: endpointSnapshot.fetchedAt, metadataState: filterStatus });
-            requestTracker.update(observationId ?? "", { providerFilterSnapshot: filter, eligibleProviderRoutingIds: result.eligibleRoutingIds, providerFilterMetadataFetchedAt: endpointSnapshot.fetchedAt, providerFilterMetadataAgeMs: endpointSnapshot.ageMs, providerFilterStatus: filterStatus });
-            if (filterStatus !== "fresh" || !result.usable || result.eligibleRoutingIds.length === 0) {
-              finishObservation({ status: 503, error: { code: result.failureReason ?? "NO_ELIGIBLE_PROVIDER", message: "Provider filter has no current eligible endpoint" } });
-              return writeError(res, 503, "Provider filter has no current eligible endpoint", result.failureReason ?? "NO_ELIGIBLE_PROVIDER");
+            const requiresSnapshot = true;
+            if (requiresSnapshot && !endpointSnapshot.available) {
+              finishObservation({ status: 503, error: { code: "FILTER_DATA_UNAVAILABLE", message: "Provider routing data is unavailable" } });
+              return writeError(res, 503, "Provider routing data is unavailable", "FILTER_DATA_UNAVAILABLE");
             }
-            const currentOnly = body?.provider?.only as string[] | undefined;
-            const hardOnly = currentOnly ? result.eligibleRoutingIds.filter((id) => currentOnly.includes(id)) : result.eligibleRoutingIds;
-            if (!hardOnly.length) {
-              finishObservation({ status: 403, error: { code: "NO_ELIGIBLE_PROVIDER", message: "Provider policy excludes every eligible endpoint" } });
-              return writeError(res, 403, "Provider policy excludes every eligible endpoint", "NO_ELIGIBLE_PROVIDER");
+            const filterStatus = !filter?.enabled ? null : !endpointSnapshot.available ? "unavailable" : isTelemetryFresh(endpointSnapshot.fetchedAt, filter.maxTelemetryAgeMs) ? "fresh" : "stale";
+            const result = filter?.enabled ? evaluateProviderEndpoints(endpointSnapshot.data, filter, { modelId: body.model, metadataFetchedAt: endpointSnapshot.fetchedAt, metadataState: filterStatus! }) : null;
+            requestTracker.update(observationId ?? "", { providerFilterSnapshot: filter ?? null, eligibleProviderRoutingIds: result?.eligibleRoutingIds ?? null, providerFilterMetadataFetchedAt: filter ? endpointSnapshot.fetchedAt : null, providerFilterMetadataAgeMs: filter ? endpointSnapshot.ageMs : null, providerFilterStatus: filterStatus });
+            if (filter?.enabled && (filterStatus !== "fresh" || !result?.usable || !result.eligibleRoutingIds.length)) {
+              finishObservation({ status: 503, error: { code: result?.failureReason ?? "NO_ELIGIBLE_PROVIDER", message: "Provider filter has no current eligible endpoint" } });
+              return writeError(res, 503, "Provider filter has no current eligible endpoint", result?.failureReason ?? "NO_ELIGIBLE_PROVIDER");
             }
-            body = { ...body, provider: { ...(body.provider ?? {}), only: hardOnly } };
-            requestTracker.update(observationId ?? "", { effectiveProviderPolicy: body.provider });
+            const availableRoutingIds = endpointSnapshot.available ? endpointSnapshot.data.map((endpoint) => endpoint.providerRoutingId).filter(Boolean) : (body.provider?.only ?? []);
+            const resolution = resolveManagedProviderRouting({ availableRoutingIds, hardFilterEligibleIds: result?.eligibleRoutingIds ?? null, accessKeyOverride: override, globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(body.model), incomingProviderPolicy: body.provider });
+            if (!resolution.finalEligibleRoutingIds.length) {
+              finishObservation({ status: 403, error: { code: "NO_ELIGIBLE_PROVIDER", message: "No provider survives the managed routing restrictions" } });
+              return writeError(res, 403, "No provider survives the managed routing restrictions", "NO_ELIGIBLE_PROVIDER");
+            }
+            body = { ...body, provider: resolution.finalProviderPolicy };
+            requestTracker.update(observationId ?? "", { effectiveProviderPolicy: resolution.finalProviderPolicy, accessKeyModelOverrideSnapshot: override ?? null, managedRoutingTrace: resolution.trace });
+            }
+          } else {
+            const effectiveProviderPolicy = resolveProviderPolicy({ globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(body?.model), incomingPolicy: body?.provider, mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
+            requestTracker.update(observationId ?? "", { effectiveProviderPolicy: effectiveProviderPolicy ?? null });
+            body = applyResolvedProviderPolicy(body, { globalPolicy: cfg.policy, modelPolicy: modelPolicies.get(body?.model), mergeMode: cfg.merge_mode, softEnforceOnly: cfg._runtime.soft_enforce_only });
+            // Passthrough remains compatible with G7 hard filters; it simply
+            // does not read a Local Access Key override.
+            if (filter?.enabled) {
+              const endpointSnapshot = metadataCatalog.getModelEndpointsSnapshot(body.model);
+              const filterStatus = !endpointSnapshot.available ? "unavailable" : isTelemetryFresh(endpointSnapshot.fetchedAt, filter.maxTelemetryAgeMs) ? "fresh" : "stale";
+              const result = evaluateProviderEndpoints(endpointSnapshot.data, filter, { modelId: body.model, metadataFetchedAt: endpointSnapshot.fetchedAt, metadataState: filterStatus });
+              requestTracker.update(observationId ?? "", { providerFilterSnapshot: filter, eligibleProviderRoutingIds: result.eligibleRoutingIds, providerFilterMetadataFetchedAt: endpointSnapshot.fetchedAt, providerFilterMetadataAgeMs: endpointSnapshot.ageMs, providerFilterStatus: filterStatus });
+              if (filterStatus !== "fresh" || !result.usable || !result.eligibleRoutingIds.length) {
+                finishObservation({ status: 503, error: { code: result.failureReason ?? "NO_ELIGIBLE_PROVIDER", message: "Provider filter has no current eligible endpoint" } });
+                return writeError(res, 503, "Provider filter has no current eligible endpoint", result.failureReason ?? "NO_ELIGIBLE_PROVIDER");
+              }
+              const restricted = body.provider?.only ? result.eligibleRoutingIds.filter((id) => body.provider.only.includes(id)) : result.eligibleRoutingIds;
+              if (!restricted.length) {
+                finishObservation({ status: 403, error: { code: "NO_ELIGIBLE_PROVIDER", message: "Provider policy excludes every eligible endpoint" } });
+                return writeError(res, 403, "Provider policy excludes every eligible endpoint", "NO_ELIGIBLE_PROVIDER");
+              }
+              body = { ...body, provider: { ...(body.provider ?? {}), only: restricted } };
+              requestTracker.update(observationId ?? "", { effectiveProviderPolicy: body.provider });
+            }
           }
         } catch (err: any) {
           if (err.code === "ERR_PROVIDER_CONFLICT") {

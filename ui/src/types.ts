@@ -145,4 +145,6 @@ export interface RequestRecord extends RequestListItem {
   providerFilterMetadataFetchedAt?: string | null;
   providerFilterMetadataAgeMs?: number | null;
   providerFilterStatus?: "fresh" | "stale" | "unavailable" | null;
+  accessKeyModelOverrideSnapshot?: { providerMode: "inherit" | "allowlist" | "blocklist"; providers?: string[]; providerOrder?: string[]; allowFallbacks?: boolean; sort?: "price" | "latency" | "throughput" | null } | null;
+  managedRoutingTrace?: { hardFilter: string[] | null; accessKeyOverride: string[] | null; modelPolicy: string[] | null; incoming: string[] | null; final: string[]; rejectedAt?: string | null } | null;
 }

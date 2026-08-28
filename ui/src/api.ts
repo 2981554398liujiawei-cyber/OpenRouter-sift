@@ -1,4 +1,5 @@
 import type { AccessKey, AccessKeySecret, DesiredModel, Endpoint, FilterPreview, ModelSummary, ProviderFilterConfig, ProviderFilterCondition, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
+import type { AccessKeyRoutingData, KeyModelRouting } from "./AccessKeyRouting";
 
 type ApiError = { error?: { message?: string } };
 
@@ -46,4 +47,8 @@ export const api = {
   createAccessKey: (body: { name: string; allowedModels: string[] }) => request<AccessKeySecret>("/access-keys", { method: "POST", body: JSON.stringify(body) }),
   updateAccessKey: (id: string, body: { name?: string; allowedModels?: string[]; enabled?: boolean }) => request<AccessKey>(`/access-keys/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteAccessKey: (id: string) => request<unknown>(`/access-keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  accessKeyRouting: (id: string, modelId?: string) => request<AccessKeyRoutingData>(modelId ? `/access-keys/${encodeURIComponent(id)}/models/${encodeURIComponent(modelId)}/override` : `/access-keys/${encodeURIComponent(id)}/routing`),
+  saveAccessKeyRouting: (id: string, routing: KeyModelRouting) => request<KeyModelRouting>(`/access-keys/${encodeURIComponent(id)}/models/${encodeURIComponent(routing.modelId)}/override`, { method: "PUT", body: JSON.stringify({ providerMode: routing.mode, providers: routing.mode === "inherit" ? [] : routing.providers, providerOrder: routing.mode === "allowlist" ? routing.providerOrder : [], allowFallbacks: routing.allowFallbacks }) }),
+  resetAccessKeyRouting: (id: string, modelId: string) => request<unknown>(`/access-keys/${encodeURIComponent(id)}/models/${encodeURIComponent(modelId)}/override`, { method: "DELETE" }),
+  previewAccessKeyRouting: (id: string, routing: KeyModelRouting) => request<Record<string, unknown>>(`/access-keys/${encodeURIComponent(id)}/models/${encodeURIComponent(routing.modelId)}/override/preview`, { method: "POST", body: JSON.stringify({ providerMode: routing.mode, providers: routing.mode === "inherit" ? [] : routing.providers, providerOrder: routing.mode === "allowlist" ? routing.providerOrder : [], allowFallbacks: routing.allowFallbacks }) }),
 };

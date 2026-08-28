@@ -70,4 +70,20 @@ describe("G6 access stores", () => {
       expect(() => models.add(" ")).toThrow("Invalid model ID");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+
+  it("persists model overrides and prunes them when grants change", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
+    try {
+      const store = new JsonAccessKeyStore(join(dir, "keys.json"));
+      const override = { providerMode: "allowlist" as const, providers: ["provider-id"] };
+      const created = store.create("Codex", ["provider/model", "other/model"], { "provider/model": override });
+      expect(store.get(created.record.id)?.modelOverrides).toEqual({ "provider/model": override });
+      store.update(created.record.id, { allowedModels: ["other/model"] });
+      expect(store.get(created.record.id)?.modelOverrides).toEqual({});
+      const reloaded = new JsonAccessKeyStore(join(dir, "keys.json"));
+      reloaded.load();
+      expect(reloaded.get(created.record.id)?.modelOverrides).toEqual({});
+      expect(() => reloaded.update(created.record.id, { modelOverrides: { "provider/model": override } })).toThrow();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });

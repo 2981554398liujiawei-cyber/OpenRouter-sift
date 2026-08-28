@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { accessKeyLast4, accessKeyPrefix, createAccessKeySecret, hashAccessKey, isLocalAccessKeySecret, verifyAccessKey } from "./crypto.js";
+import { modelOverridesSchema, validateModelOverrides, type ModelOverrides } from "./schema.js";
 
 export interface AccessKey {
   id: string;
@@ -11,6 +12,8 @@ export interface AccessKey {
   keyLast4: string;
   enabled: boolean;
   allowedModels: string[];
+  /** Optional for backwards compatibility with version-1 files. */
+  modelOverrides: ModelOverrides;
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;
@@ -43,26 +46,36 @@ export class JsonAccessKeyStore {
     for (const key of Object.values(parsed.keys)) {
       if (!key.id || !key.keyHash || !key.keyPrefix || !key.keyLast4 || typeof key.enabled !== "boolean" || !Array.isArray(key.allowedModels)) throw new Error("Invalid access key entry");
       cleanName(key.name); cleanModels(key.allowedModels);
+      modelOverridesSchema.parse(key.modelOverrides ?? {});
     }
-    this.keys = structuredClone(parsed.keys);
+    this.keys = Object.fromEntries(Object.entries(parsed.keys).map(([id, key]) => {
+      const allowedModels = cleanModels(key.allowedModels);
+      const overrides = validateModelOverrides(key.modelOverrides ?? {});
+      return [id, { ...key, allowedModels, modelOverrides: Object.fromEntries(Object.entries(overrides).filter(([source]) => allowedModels.includes(source))) }];
+    }));
   }
 
   list(): AccessKey[] { return Object.values(this.keys).map((key) => structuredClone(key)); }
   get(id: string): AccessKey | undefined { return this.keys[id] ? structuredClone(this.keys[id]) : undefined; }
 
-  create(name: string, allowedModels: string[]): CreatedAccessKey {
+  create(name: string, allowedModels: string[], modelOverrides: ModelOverrides = {}): CreatedAccessKey {
     const secret = createAccessKeySecret();
     const now = new Date().toISOString();
-    const record: AccessKey = { id: randomUUID(), name: cleanName(name), keyHash: hashAccessKey(secret), keyPrefix: accessKeyPrefix(secret), keyLast4: accessKeyLast4(secret), enabled: true, allowedModels: cleanModels(allowedModels), createdAt: now, updatedAt: now, lastUsedAt: null };
+    const cleanedModels = cleanModels(allowedModels);
+    const record: AccessKey = { id: randomUUID(), name: cleanName(name), keyHash: hashAccessKey(secret), keyPrefix: accessKeyPrefix(secret), keyLast4: accessKeyLast4(secret), enabled: true, allowedModels: cleanedModels, modelOverrides: validateModelOverrides(modelOverrides, cleanedModels), createdAt: now, updatedAt: now, lastUsedAt: null };
     this.keys[record.id] = record;
     this.persist();
     return { record: structuredClone(record), secret };
   }
 
-  update(id: string, patch: { name?: string; allowedModels?: string[]; enabled?: boolean }): AccessKey {
+  update(id: string, patch: { name?: string; allowedModels?: string[]; enabled?: boolean; modelOverrides?: ModelOverrides }): AccessKey {
     const existing = this.keys[id];
     if (!existing) throw new Error("Access key not found");
-    const record = { ...existing, ...(patch.name === undefined ? {} : { name: cleanName(patch.name) }), ...(patch.allowedModels === undefined ? {} : { allowedModels: cleanModels(patch.allowedModels) }), ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }), updatedAt: new Date().toISOString() };
+    const allowedModels = patch.allowedModels === undefined ? existing.allowedModels : cleanModels(patch.allowedModels);
+    const modelOverrides = patch.modelOverrides === undefined
+      ? Object.fromEntries(Object.entries(existing.modelOverrides ?? {}).filter(([source]) => allowedModels.includes(source)))
+      : validateModelOverrides(patch.modelOverrides, allowedModels);
+    const record = { ...existing, allowedModels, modelOverrides, ...(patch.name === undefined ? {} : { name: cleanName(patch.name) }), ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }), updatedAt: new Date().toISOString() };
     this.keys[id] = record; this.persist(); return structuredClone(record);
   }
 
@@ -91,7 +104,9 @@ export class JsonAccessKeyStore {
   removeModelFromAll(modelId: string): number {
     let changed = 0;
     for (const key of Object.values(this.keys)) {
-      if (key.allowedModels.includes(modelId)) { key.allowedModels = key.allowedModels.filter((model) => model !== modelId); key.updatedAt = new Date().toISOString(); changed++; }
+      const allowedModels = key.allowedModels.filter((model) => model !== modelId);
+      const modelOverrides = Object.fromEntries(Object.entries(key.modelOverrides ?? {}).filter(([source]) => source !== modelId && allowedModels.includes(source)));
+      if (allowedModels.length !== key.allowedModels.length || Object.keys(modelOverrides).length !== Object.keys(key.modelOverrides ?? {}).length) { key.allowedModels = allowedModels; key.modelOverrides = modelOverrides; key.updatedAt = new Date().toISOString(); changed++; }
     }
     if (changed) this.persist();
     return changed;

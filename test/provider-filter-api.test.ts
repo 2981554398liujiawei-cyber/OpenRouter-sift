@@ -31,5 +31,19 @@ describe("provider filter API and proxy", () => it("previews and hard-limits man
     expect((await nativeFetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${key.secret}`, "content-type": "application/json" }, body: JSON.stringify({ model: "demo/model", messages: [] }) })).status).toBe(200);
     expect(endpointCalls).toBe(callsBeforeInference);
     expect(forwarded.at(-1).provider.only).toEqual(["good"]);
+    expect((await nativeFetch(`${base}/api/access-keys/${key.id}/models/demo%2Fmodel/override`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ providerMode: "allowlist", providers: ["good"], providerOrder: ["good"], allowFallbacks: false }) })).status).toBe(200);
+    const savedOverride = await (await nativeFetch(`${base}/api/access-keys/${key.id}/models/demo%2Fmodel/override`)).json() as any;
+    expect(savedOverride.override).toMatchObject({ providerMode: "allowlist", providers: ["good"] });
+    const overridePreview = await (await nativeFetch(`${base}/api/access-keys/${key.id}/models/demo%2Fmodel/override/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ candidateOverride: { providerMode: "allowlist", providers: ["good"] } }) })).json() as any;
+    expect(overridePreview.final.eligible).toEqual(["good"]);
+    for (const [path, body] of [
+      ["/v1/chat/completions", { model: "demo/model", messages: [] }],
+      ["/v1/responses", { model: "demo/model", input: "x" }],
+      ["/v1/messages", { model: "demo/model", messages: [] }],
+    ] as const) {
+      expect((await nativeFetch(`${base}${path}`, { method: "POST", headers: { authorization: `Bearer ${key.secret}`, "content-type": "application/json" }, body: JSON.stringify(body) })).status).toBe(200);
+      expect(forwarded.at(-1).provider).toMatchObject({ only: ["good"], order: ["good"], allow_fallbacks: false });
+    }
+    expect((await nativeFetch(`${base}/v1/responses`, { method: "POST", headers: { authorization: `Bearer ${key.secret}`, "content-type": "application/json" }, body: JSON.stringify({ model: "demo/model", input: "x", provider: { only: ["slow"] } }) })).status).toBe(403);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }));
