@@ -204,14 +204,15 @@ export function startServer(cfg: ShimConfig): http.Server {
     log.error({ err: err?.message ?? String(err), path: cfg.metadata_cache_path }, "metadata cache unavailable; continuing without cached metadata");
   }
   const settingsStore = new JsonSettingsStore(cfg.settings_store_path);
-  let controlSettings: ControlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: 1000 };
+  let controlSettings: ControlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: 1000, desiredEndpointRefreshIntervalMs: 60_000 };
   try {
     const saved = settingsStore.load();
     if (saved.mergeMode) cfg.merge_mode = saved.mergeMode;
     if (saved.globalPolicy) cfg.policy = ProviderPolicySchema.parse(saved.globalPolicy);
     if (typeof saved.metadataTtlMs === "number" && Number.isInteger(saved.metadataTtlMs) && saved.metadataTtlMs >= 1_000) metadataCatalog.setTtlMs(saved.metadataTtlMs);
     const requestLogLimit = typeof saved.requestLogLimit === "number" && Number.isInteger(saved.requestLogLimit) && saved.requestLogLimit >= 100 && saved.requestLogLimit <= 10_000 ? saved.requestLogLimit : 1000;
-    controlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit };
+    const desiredEndpointRefreshIntervalMs = typeof saved.desiredEndpointRefreshIntervalMs === "number" && Number.isInteger(saved.desiredEndpointRefreshIntervalMs) && saved.desiredEndpointRefreshIntervalMs >= 30_000 && saved.desiredEndpointRefreshIntervalMs <= 600_000 ? saved.desiredEndpointRefreshIntervalMs : 60_000;
+    controlSettings = { mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit, desiredEndpointRefreshIntervalMs };
   } catch (err: any) {
     log.error({ err: err?.message ?? String(err), path: cfg.settings_store_path }, "settings store unavailable; using configured defaults");
   }
@@ -231,6 +232,12 @@ export function startServer(cfg: ShimConfig): http.Server {
         catch (err) { log.error({ modelId: model.modelId, err: safeObservationError(err).message }, "desired endpoint refresh failed"); }
       }));
     }
+  };
+  let desiredRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  const setDesiredRefreshInterval = (intervalMs: number) => {
+    if (desiredRefreshTimer) clearInterval(desiredRefreshTimer);
+    desiredRefreshTimer = setInterval(() => { void refreshDesiredEndpoints(); }, intervalMs);
+    desiredRefreshTimer.unref?.();
   };
 
   const server = http.createServer(async (req, res) => {
@@ -502,7 +509,7 @@ export function startServer(cfg: ShimConfig): http.Server {
             return writeJson(res, 200, { deleted });
           }
           if (url.pathname === "/api/settings" && req.method === "GET") {
-            return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit() });
+            return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit(), desiredEndpointRefreshIntervalMs: controlSettings.desiredEndpointRefreshIntervalMs });
           }
           if (url.pathname === "/api/settings" && req.method === "PUT") {
             try {
@@ -512,6 +519,7 @@ export function startServer(cfg: ShimConfig): http.Server {
               let nextGlobalPolicy = cfg.policy;
               let nextMetadataTtlMs = metadataCatalog.getTtlMs();
               let nextRequestLogLimit = requestLogs.getLimit();
+              let nextDesiredEndpointRefreshIntervalMs = controlSettings.desiredEndpointRefreshIntervalMs ?? 60_000;
               if (update.mergeMode !== undefined) {
                 if (update.mergeMode !== "merge" && update.mergeMode !== "override" && update.mergeMode !== "strict") return writeError(res, 400, "Invalid merge mode", "INVALID_SETTINGS");
                 nextMergeMode = update.mergeMode;
@@ -525,14 +533,19 @@ export function startServer(cfg: ShimConfig): http.Server {
                 if (typeof update.requestLogLimit !== "number" || !Number.isInteger(update.requestLogLimit) || update.requestLogLimit < 100 || update.requestLogLimit > 10_000) return writeError(res, 400, "requestLogLimit must be an integer from 100 to 10000", "INVALID_SETTINGS");
                 nextRequestLogLimit = update.requestLogLimit;
               }
-              const nextSettings = { mergeMode: nextMergeMode, globalPolicy: nextGlobalPolicy, metadataTtlMs: nextMetadataTtlMs, requestLogLimit: nextRequestLogLimit };
+              if (update.desiredEndpointRefreshIntervalMs !== undefined) {
+                if (typeof update.desiredEndpointRefreshIntervalMs !== "number" || !Number.isInteger(update.desiredEndpointRefreshIntervalMs) || update.desiredEndpointRefreshIntervalMs < 30_000 || update.desiredEndpointRefreshIntervalMs > 600_000) return writeError(res, 400, "desiredEndpointRefreshIntervalMs must be an integer from 30000 to 600000", "INVALID_SETTINGS");
+                nextDesiredEndpointRefreshIntervalMs = update.desiredEndpointRefreshIntervalMs;
+              }
+              const nextSettings = { mergeMode: nextMergeMode, globalPolicy: nextGlobalPolicy, metadataTtlMs: nextMetadataTtlMs, requestLogLimit: nextRequestLogLimit, desiredEndpointRefreshIntervalMs: nextDesiredEndpointRefreshIntervalMs };
               settingsStore.save(nextSettings);
               cfg.merge_mode = nextMergeMode;
               cfg.policy = nextGlobalPolicy;
               metadataCatalog.setTtlMs(nextMetadataTtlMs);
               requestTracker.setLimit(nextRequestLogLimit);
+              setDesiredRefreshInterval(nextDesiredEndpointRefreshIntervalMs);
               controlSettings = nextSettings;
-              return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit() });
+              return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit(), desiredEndpointRefreshIntervalMs: controlSettings.desiredEndpointRefreshIntervalMs });
             } catch { return writeError(res, 400, "Invalid settings", "INVALID_SETTINGS"); }
           }
           const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/desired-models" || url.pathname === "/api/access-keys" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || desiredModelMatch || accessKeyMatch || policyMatch || requestDetailMatch;
@@ -847,9 +860,8 @@ export function startServer(cfg: ShimConfig): http.Server {
   // Refresh only enabled Desired Models outside the request path. Server startup
   // and inference remain independent of this best-effort telemetry work.
   void refreshDesiredEndpoints();
-  const desiredRefreshTimer = setInterval(() => { void refreshDesiredEndpoints(); }, 60_000);
-  desiredRefreshTimer.unref?.();
-  server.once("close", () => clearInterval(desiredRefreshTimer));
+  setDesiredRefreshInterval(controlSettings.desiredEndpointRefreshIntervalMs ?? 60_000);
+  server.once("close", () => { if (desiredRefreshTimer) clearInterval(desiredRefreshTimer); });
 
   return server;
 }

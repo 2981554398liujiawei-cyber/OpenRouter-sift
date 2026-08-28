@@ -45,6 +45,7 @@ export interface Settings {
   globalPolicy: Record<string, unknown>;
   metadataTtlMs: number;
   requestLogLimit: number;
+  desiredEndpointRefreshIntervalMs: number;
 }
 
 export interface DesiredModel {

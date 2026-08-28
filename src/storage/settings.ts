@@ -7,6 +7,7 @@ export interface ControlSettings {
   globalPolicy?: ProviderPolicy;
   metadataTtlMs?: number;
   requestLogLimit?: number;
+  desiredEndpointRefreshIntervalMs?: number;
 }
 
 interface SettingsFile { version: 1; settings: ControlSettings; }
