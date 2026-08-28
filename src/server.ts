@@ -21,7 +21,7 @@ import { RequestTracker } from "./observability/requestTracker.js";
 import type { RequestProtocol } from "./observability/requestRecord.js";
 import { JsonDesiredModelStore } from "./access/desiredModelStore.js";
 import { JsonAccessKeyStore, type AccessKey } from "./access/accessKeyStore.js";
-import { evaluateProviderEndpoints, type ProviderFilterConfig } from "./providerFilters/index.js";
+import { evaluateProviderEndpoints, isTelemetryFresh, providerFilterConfigSchema, type ProviderFilterConfig } from "./providerFilters/index.js";
 
 const OPENROUTER_BASE_V1 = "https://openrouter.ai/api/v1";
 // In the bundled CLI, the UI lives beside `dist/server`, not beside the caller's cwd.
@@ -223,6 +223,16 @@ export function startServer(cfg: ShimConfig): http.Server {
   try { desiredModels.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.desired_model_store_path }, "desired model store unavailable; using an empty desired model set"); }
   try { accessKeys.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.access_key_store_path }, "access key store unavailable; managed access keys are unavailable"); }
 
+  const refreshDesiredEndpoints = async () => {
+    const models = desiredModels.list().filter((model) => model.enabled);
+    for (let index = 0; index < models.length; index += 2) {
+      await Promise.all(models.slice(index, index + 2).map(async (model) => {
+        try { await metadataCatalog.getModelEndpoints(model.modelId, true); }
+        catch (err) { log.error({ modelId: model.modelId, err: safeObservationError(err).message }, "desired endpoint refresh failed"); }
+      }));
+    }
+  };
+
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
     const url = new URL(req.url ?? "/", `http://${cfg.host}:${cfg.port}`);
@@ -345,7 +355,8 @@ export function startServer(cfg: ShimConfig): http.Server {
           const filterPreviewMatch = url.pathname.match(/^\/api\/desired-models\/([^/]+)\/filter\/preview$/);
           const evaluateFilter = async (modelId: string, filter: ProviderFilterConfig | null) => {
             const snapshot = await metadataCatalog.getModelEndpoints(modelId);
-            return evaluateProviderEndpoints(snapshot.data, filter, { modelId, metadataFetchedAt: snapshot.fetchedAt, metadataState: snapshot.state });
+            const state = !snapshot.fetchedAt ? "unavailable" : filter?.enabled && !isTelemetryFresh(snapshot.fetchedAt, filter.maxTelemetryAgeMs) ? "stale" : "fresh";
+            return evaluateProviderEndpoints(snapshot.data, filter, { modelId, metadataFetchedAt: snapshot.fetchedAt, metadataState: state });
           };
           if (filterMatch && req.method === "GET") {
             const modelId = decodeModelId(filterMatch[1]); if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
@@ -355,16 +366,17 @@ export function startServer(cfg: ShimConfig): http.Server {
           if (filterPreviewMatch && req.method === "POST") {
             const modelId = decodeModelId(filterPreviewMatch[1]); if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
             if (!desiredModels.get(modelId)) return writeError(res, 404, "Desired model not found", "DESIRED_MODEL_NOT_FOUND");
-            const input = await readJsonBody(req, cfg.max_body_bytes) as { conditions?: unknown };
-            if (!Array.isArray(input.conditions)) return writeError(res, 400, "conditions must be an array", "INVALID_FILTER");
-            const filter: ProviderFilterConfig = { enabled: true, mode: "all", conditions: input.conditions as ProviderFilterConfig["conditions"], maxTelemetryAgeMs: 300_000, updatedAt: new Date().toISOString() };
+            const input = await readJsonBody(req, cfg.max_body_bytes) as { candidateFilter?: unknown };
+            const parsed = providerFilterConfigSchema.safeParse(input.candidateFilter);
+            if (!parsed.success) return writeError(res, 400, "Invalid provider filter", "INVALID_PROVIDER_FILTER");
+            const filter: ProviderFilterConfig = { ...parsed.data, updatedAt: new Date().toISOString() };
             return writeJson(res, 200, await evaluateFilter(modelId, filter));
           }
           if (filterMatch && req.method === "PUT") {
             const modelId = decodeModelId(filterMatch[1]); if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
-            const input = await readJsonBody(req, cfg.max_body_bytes) as ProviderFilterConfig;
-            if (!input || input.mode !== "all" || !Array.isArray(input.conditions) || typeof input.enabled !== "boolean") return writeError(res, 400, "Invalid filter", "INVALID_FILTER");
-            const filter = { ...input, updatedAt: new Date().toISOString() };
+            const parsed = providerFilterConfigSchema.safeParse(await readJsonBody(req, cfg.max_body_bytes));
+            if (!parsed.success) return writeError(res, 400, "Invalid provider filter", "INVALID_PROVIDER_FILTER");
+            const filter = { ...parsed.data, updatedAt: new Date().toISOString() };
             try { desiredModels.setProviderFilter(modelId, filter); return writeJson(res, 200, { filter, preview: await evaluateFilter(modelId, filter) }); } catch { return writeError(res, 404, "Desired model not found", "DESIRED_MODEL_NOT_FOUND"); }
           }
           if (filterMatch && req.method === "DELETE") {
@@ -649,9 +661,11 @@ export function startServer(cfg: ShimConfig): http.Server {
           });
           const filter = desiredModels.get(typeof body?.model === "string" ? body.model : "")?.providerFilter;
           if (filter?.enabled) {
-            const endpointSnapshot = await metadataCatalog.getModelEndpoints(body.model);
-            const result = evaluateProviderEndpoints(endpointSnapshot.data, filter, { modelId: body.model, metadataFetchedAt: endpointSnapshot.fetchedAt, metadataState: endpointSnapshot.state });
-            if (endpointSnapshot.state !== "fresh" || !result.usable || result.eligibleRoutingIds.length === 0) {
+            const endpointSnapshot = metadataCatalog.getModelEndpointsSnapshot(body.model);
+            const filterStatus = !endpointSnapshot.available ? "unavailable" : isTelemetryFresh(endpointSnapshot.fetchedAt, filter.maxTelemetryAgeMs) ? "fresh" : "stale";
+            const result = evaluateProviderEndpoints(endpointSnapshot.data, filter, { modelId: body.model, metadataFetchedAt: endpointSnapshot.fetchedAt, metadataState: filterStatus });
+            requestTracker.update(observationId ?? "", { providerFilterSnapshot: filter, eligibleProviderRoutingIds: result.eligibleRoutingIds, providerFilterMetadataFetchedAt: endpointSnapshot.fetchedAt, providerFilterMetadataAgeMs: endpointSnapshot.ageMs, providerFilterStatus: filterStatus });
+            if (filterStatus !== "fresh" || !result.usable || result.eligibleRoutingIds.length === 0) {
               finishObservation({ status: 503, error: { code: result.failureReason ?? "NO_ELIGIBLE_PROVIDER", message: "Provider filter has no current eligible endpoint" } });
               return writeError(res, 503, "Provider filter has no current eligible endpoint", result.failureReason ?? "NO_ELIGIBLE_PROVIDER");
             }
@@ -830,6 +844,12 @@ export function startServer(cfg: ShimConfig): http.Server {
       enable_responses: cfg.enable_responses,
     }, "server started");
   });
+  // Refresh only enabled Desired Models outside the request path. Server startup
+  // and inference remain independent of this best-effort telemetry work.
+  void refreshDesiredEndpoints();
+  const desiredRefreshTimer = setInterval(() => { void refreshDesiredEndpoints(); }, 60_000);
+  desiredRefreshTimer.unref?.();
+  server.once("close", () => clearInterval(desiredRefreshTimer));
 
   return server;
 }
