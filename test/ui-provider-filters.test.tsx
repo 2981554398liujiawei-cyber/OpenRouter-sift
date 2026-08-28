@@ -15,8 +15,9 @@ describe("Desired Model provider filters UI", () => {
       else if (url.endsWith("/models")) body = { items: [{ id: "deepseek/demo", name: "DeepSeek Demo", contextLength: 8192, pricing: {}, policySummary: "inherit" }], total: 1 };
       else if (url.endsWith("/desired-models")) body = { items: [{ modelId: "deepseek/demo", enabled: true }] };
       else if (url.endsWith("/endpoints")) body = { items: [{ providerName: "Relace", providerRoutingId: "relace", pricing: { prompt: "0.0000002" }, performance: { latencyLast30m: { p90: 1.2 }, throughputLast30m: { p50: 63 }, uptimeLast5m: 99.8 } }] };
-      else if (url.endsWith("/filter")) body = null;
-      else if (url.includes("/filter/preview")) body = { total: 1, eligible: 1, eligibleRoutingIds: ["relace"], endpoints: [{ providerName: "Relace", providerRoutingId: "relace", eligible: true, reasons: [] }] };
+      // Real control-API contract (ProviderFilterResult), not a UI-shaped guess.
+      else if (url.endsWith("/filter")) body = { filter: { enabled: true, mode: "all", conditions: [], maxTelemetryAgeMs: 1800000, updatedAt: new Date().toISOString() }, preview: { modelId: "deepseek/demo", totalEndpoints: 1, eligibleEndpoints: [{ endpoint: { providerName: "Relace", providerRoutingId: "relace" }, eligible: true, reasons: [] }], excludedEndpoints: [], eligibleRoutingIds: ["relace"], metadataFetchedAt: new Date().toISOString(), metadataState: "fresh", usable: true, failureReason: null } };
+      else if (url.includes("/filter/preview")) body = { modelId: "deepseek/demo", totalEndpoints: 1, eligibleEndpoints: [{ endpoint: { providerName: "Relace", providerRoutingId: "relace" }, eligible: true, reasons: [] }], excludedEndpoints: [], eligibleRoutingIds: ["relace"], evaluatedAt: new Date().toISOString(), metadataFetchedAt: new Date().toISOString(), metadataState: "fresh", usable: true, failureReason: null };
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     render(<App />);

@@ -22,7 +22,7 @@ import type { RequestProtocol } from "./observability/requestRecord.js";
 import { JsonDesiredModelStore } from "./access/desiredModelStore.js";
 import { JsonAccessKeyStore, type AccessKey } from "./access/accessKeyStore.js";
 import { validateModelOverrides, type ModelOverrides } from "./access/schema.js";
-import { evaluateProviderEndpoints, isTelemetryFresh, providerFilterConfigSchema, type ProviderFilterConfig } from "./providerFilters/index.js";
+import { evaluateProviderEndpoints, isTelemetryFresh, providerFilterUpsertSchema, type ProviderFilterConfig } from "./providerFilters/index.js";
 import { resolveManagedProviderRouting } from "./policy/managedRouting.js";
 
 const OPENROUTER_BASE_V1 = "https://openrouter.ai/api/v1";
@@ -377,14 +377,14 @@ export function startServer(cfg: ShimConfig): http.Server {
             const modelId = decodeModelId(filterPreviewMatch[1]); if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
             if (!desiredModels.get(modelId)) return writeError(res, 404, "Desired model not found", "DESIRED_MODEL_NOT_FOUND");
             const input = await readJsonBody(req, cfg.max_body_bytes) as { candidateFilter?: unknown };
-            const parsed = providerFilterConfigSchema.safeParse(input.candidateFilter);
+            const parsed = providerFilterUpsertSchema.safeParse(input.candidateFilter);
             if (!parsed.success) return writeError(res, 400, "Invalid provider filter", "INVALID_PROVIDER_FILTER");
             const filter: ProviderFilterConfig = { ...parsed.data, updatedAt: new Date().toISOString() };
             return writeJson(res, 200, await evaluateFilter(modelId, filter));
           }
           if (filterMatch && req.method === "PUT") {
             const modelId = decodeModelId(filterMatch[1]); if (!modelId) return writeError(res, 400, "Invalid model ID", "INVALID_MODEL_ID");
-            const parsed = providerFilterConfigSchema.safeParse(await readJsonBody(req, cfg.max_body_bytes));
+            const parsed = providerFilterUpsertSchema.safeParse(await readJsonBody(req, cfg.max_body_bytes));
             if (!parsed.success) return writeError(res, 400, "Invalid provider filter", "INVALID_PROVIDER_FILTER");
             const filter = { ...parsed.data, updatedAt: new Date().toISOString() };
             try { desiredModels.setProviderFilter(modelId, filter); return writeJson(res, 200, { filter, preview: await evaluateFilter(modelId, filter) }); } catch { return writeError(res, 404, "Desired model not found", "DESIRED_MODEL_NOT_FOUND"); }

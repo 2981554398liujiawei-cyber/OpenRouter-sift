@@ -37,18 +37,26 @@ export const providerFilterConditionSchema = z.object({
   }
 });
 
-export const providerFilterConfigSchema = z.object({
+const providerFilterConfigBase = z.object({
   enabled: z.boolean(),
   mode: z.literal("all"),
   conditions: z.array(providerFilterConditionSchema).max(100),
   maxTelemetryAgeMs: z.number().int().min(30_000).max(24 * 60 * 60 * 1000),
   updatedAt: z.string().min(1).max(64),
-}).strict().superRefine((filter, ctx) => {
+}).strict();
+
+const uniqueConditionIds = (filter: { conditions: Array<{ id: string }> }, ctx: z.RefinementCtx) => {
   const ids = new Set<string>();
   for (const [index, condition] of filter.conditions.entries()) {
     if (ids.has(condition.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["conditions", index, "id"], message: "Condition IDs must be unique" });
     ids.add(condition.id);
   }
-});
+};
+
+export const providerFilterConfigSchema = providerFilterConfigBase.superRefine(uniqueConditionIds);
+
+/** Clients never need to send `updatedAt` — the server stamps the stored value on every save. */
+export const providerFilterUpsertSchema = providerFilterConfigBase.omit({ updatedAt: true }).extend({ updatedAt: z.string().min(1).max(64).optional() }).superRefine(uniqueConditionIds);
 
 export type ValidatedProviderFilterConfig = z.infer<typeof providerFilterConfigSchema>;
+export type ValidatedProviderFilterUpsert = z.infer<typeof providerFilterUpsertSchema>;

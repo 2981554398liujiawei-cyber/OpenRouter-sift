@@ -84,19 +84,30 @@ export interface ProviderFilterConfig {
   maxTelemetryAgeMs: number;
   updatedAt?: string;
 }
+export interface FilterPreviewReason { conditionId?: string; code?: string; message: string }
 export interface FilterPreviewEndpoint {
   providerName: string | null;
   providerRoutingId: string | null;
-  eligible: boolean;
-  reasons: Array<{ conditionId?: string; code?: string; message: string }>;
   [key: string]: unknown;
 }
+/** Endpoint evaluation entry: the endpoint DTO plus its eligibility verdict and reasons. */
+export interface FilterPreviewEntry {
+  endpoint: FilterPreviewEndpoint;
+  eligible: boolean;
+  reasons: FilterPreviewReason[];
+}
+/** Matches the server's ProviderFilterResult contract for /filter and /filter/preview. */
 export interface FilterPreview {
-  total: number;
-  eligible: number;
+  modelId?: string;
+  totalEndpoints: number;
+  eligibleEndpoints: FilterPreviewEntry[];
+  excludedEndpoints: FilterPreviewEntry[];
   eligibleRoutingIds: string[];
-  endpoints: FilterPreviewEndpoint[];
-  metadata?: { fetchedAt?: string | null; stale?: boolean; ageMs?: number | null; available?: boolean; state?: string };
+  evaluatedAt?: string;
+  metadataFetchedAt: string | null;
+  metadataState?: "fresh" | "stale" | "unavailable";
+  usable?: boolean;
+  failureReason?: string | null;
 }
 
 export interface AccessKey {
