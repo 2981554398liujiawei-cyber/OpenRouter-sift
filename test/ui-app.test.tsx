@@ -26,6 +26,8 @@ describe("provider control UI", () => {
     render(<App />);
     await screen.findByText("GPT Demo");
     fireEvent.click(screen.getByText("GPT Demo"));
+    fireEvent.click(await screen.findByRole("tab", { name: "Providers" }));
+    await screen.findByText("Relace");
     await screen.findByText("Provider endpoints");
     fireEvent.click(screen.getByLabelText("Allowlist"));
     fireEvent.click(screen.getByLabelText("Relace"));
