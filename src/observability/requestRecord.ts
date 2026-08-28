@@ -1,4 +1,5 @@
 import type { ProviderPolicy } from "../config.js";
+import type { ProviderFilterConfig } from "../providerFilters/types.js";
 
 export type RequestProtocol = "anthropic_messages" | "chat_completions" | "responses";
 export type EnrichmentStatus = "pending" | "success" | "failed" | "unavailable";
@@ -20,6 +21,11 @@ export interface RequestRecord {
   cacheStatus: string | null;
   cacheAge: string | null;
   effectiveProviderPolicy: ProviderPolicy | null;
+  providerFilterSnapshot: ProviderFilterConfig | null;
+  eligibleProviderRoutingIds: string[] | null;
+  providerFilterMetadataFetchedAt: string | null;
+  providerFilterMetadataAgeMs: number | null;
+  providerFilterStatus: "fresh" | "stale" | "unavailable" | null;
   actualProviderName: string | null;
   actualProviderRoutingId: string | null;
   promptTokens: number | null;
@@ -56,6 +62,11 @@ export function newRequestRecord(id: string, protocol: RequestProtocol): Request
     cacheStatus: null,
     cacheAge: null,
     effectiveProviderPolicy: null,
+    providerFilterSnapshot: null,
+    eligibleProviderRoutingIds: null,
+    providerFilterMetadataFetchedAt: null,
+    providerFilterMetadataAgeMs: null,
+    providerFilterStatus: null,
     actualProviderName: null,
     actualProviderRoutingId: null,
     promptTokens: null,

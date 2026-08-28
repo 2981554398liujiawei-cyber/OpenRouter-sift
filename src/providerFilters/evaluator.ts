@@ -52,7 +52,10 @@ function evaluateCondition(endpoint: EndpointDto, condition: ProviderFilterCondi
 export function evaluateProviderEndpoints(endpoints: EndpointDto[], filterConfig: ProviderFilterConfig | null | undefined, context: FilterEvaluationContext): ProviderFilterResult {
   const metadataState = context.metadataState ?? "fresh";
   const evaluations = endpoints.map((endpoint) => {
-    const reasons = filterConfig?.enabled ? filterConfig.conditions.filter((c) => c.enabled).map((c) => evaluateCondition(endpoint, c)).filter((r): r is FilterReason => r !== null) : [];
+    const reasons = filterConfig?.enabled ? [
+      ...(endpoint.providerRoutingId ? [] : [reason({ id: "__provider_tag__", field: "provider.routingId", operator: "exists", value: null, enabled: true }, "PROVIDER_ROUTING_ID_MISSING", "Provider routing tag is unavailable")]),
+      ...filterConfig.conditions.filter((c) => c.enabled).map((c) => evaluateCondition(endpoint, c)).filter((r): r is FilterReason => r !== null),
+    ] : [];
     return { endpoint, eligible: reasons.length === 0, reasons };
   });
   const eligibleEndpoints = evaluations.filter((e) => e.eligible);

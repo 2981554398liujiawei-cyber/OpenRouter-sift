@@ -5,6 +5,13 @@ import { JsonMetadataStore, type CachedValue } from "../storage/metadata.js";
 
 export type CacheState = "fresh" | "stale" | "unavailable";
 export interface CatalogResult<T> { data: T; fetchedAt: string | null; state: CacheState; }
+/** A cache-only view for latency-sensitive inference paths. This method never performs network IO. */
+export interface EndpointSnapshot {
+  data: EndpointDto[];
+  fetchedAt: string | null;
+  ageMs: number | null;
+  available: boolean;
+}
 export interface CatalogStatus { lastSuccessfulMetadataRequestAt: string | null; lastError: string | null; modelCount: number; fetchedAt: string | null; stale: boolean; }
 
 export class OpenRouterCatalog {
@@ -36,6 +43,14 @@ export class OpenRouterCatalog {
     }, (cached) => this.store.setEndpoints(modelId, cached));
     this.endpointsInFlight.set(modelId, operation);
     try { return await operation; } finally { this.endpointsInFlight.delete(modelId); }
+  }
+
+  getModelEndpointsSnapshot(modelId: string): EndpointSnapshot {
+    const cached = this.store.getEndpoints(modelId);
+    if (!cached) return { data: [], fetchedAt: null, ageMs: null, available: false };
+    const fetchedAtMs = Date.parse(cached.fetchedAt);
+    const ageMs = Number.isFinite(fetchedAtMs) ? Math.max(0, Date.now() - fetchedAtMs) : null;
+    return { data: cached.value, fetchedAt: cached.fetchedAt, ageMs, available: true };
   }
 
   getModelsSnapshot(): CatalogResult<ModelDto[]> {

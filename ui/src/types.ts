@@ -84,7 +84,7 @@ export interface FilterPreview {
   eligible: number;
   eligibleRoutingIds: string[];
   endpoints: FilterPreviewEndpoint[];
-  metadata?: { fetchedAt?: string | null; stale?: boolean };
+  metadata?: { fetchedAt?: string | null; stale?: boolean; ageMs?: number | null; available?: boolean; state?: string };
 }
 
 export interface AccessKey {
@@ -139,4 +139,9 @@ export interface RequestRecord extends RequestListItem {
   serviceTier: string | null;
   error: { code: string | null; message: string | null } | null;
   actualProviderRoutingId: string | null;
+  providerFilterSnapshot?: ProviderFilterConfig | null;
+  eligibleProviderRoutingIds?: string[] | null;
+  providerFilterMetadataFetchedAt?: string | null;
+  providerFilterMetadataAgeMs?: number | null;
+  providerFilterStatus?: "fresh" | "stale" | "unavailable" | null;
 }

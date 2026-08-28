@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { providerFilterConfigSchema } from "../providerFilters/schema.js";
 import type { ProviderFilterConfig } from "../providerFilters/types.js";
 
 export interface DesiredModel {
@@ -29,6 +30,7 @@ export class JsonDesiredModelStore {
       if (id !== model.modelId || !validModelId(id) || typeof model.enabled !== "boolean" || typeof model.createdAt !== "string" || typeof model.updatedAt !== "string") {
         throw new Error("Invalid desired model entry");
       }
+      if (model.providerFilter !== undefined && model.providerFilter !== null && !providerFilterConfigSchema.safeParse(model.providerFilter).success) throw new Error("Invalid desired model provider filter");
     }
     this.models = Object.fromEntries(Object.entries(parsed.models).map(([id, model]) => [id, { ...model, providerFilter: model.providerFilter ?? null }]));
   }
