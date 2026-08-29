@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 Release candidate: `1.0.0-rc.1`
-Decision: `PENDING FINAL CI`
+Decision: `V1.0 READY`
 
 ## 【G13 Commits】
 
@@ -12,7 +12,7 @@ i18n: English default with Simplified Chinese switching, persisted locale prefer
 Security: timing-safe local-key comparison, bounded timeout/body settings, collision-resistant atomic store writes.
 CI/Packaging: reproducible `prepack`, clean tarball smoke, preferred `openrouter-sift` binary and legacy alias.
 Docs: README onboarding/security updates, CHANGELOG, this evidence report.
-Seal: pending final commit and remote CI result.
+Seal: implementation commit `f39e523`; remote CI run `33261030017` passed on Ubuntu Node 20/22 and Windows Node 20.
 
 ## 【Threat Model】
 
@@ -123,7 +123,7 @@ Node versions: Ubuntu Node 20, Ubuntu Node 22, Windows Node 20; package engines 
 Tests: `npm ci`, `npm test -- --run`, `npm run lint`, `npm run build`, audit, package dry-run, and package smoke are in the workflow.
 Lint: included in every matrix job.
 Build: included in every matrix job.
-Remote result: pending push; this report will be updated with the GitHub Actions run after publication.
+Remote result: PASS — GitHub Actions run `33261030017`; Ubuntu Node 20, Ubuntu Node 22, and Windows Node 20 all passed every configured step.
 
 ## 【Packaging】
 
@@ -167,11 +167,11 @@ Real installed RC UI: Requests showed a real short inference record with HTTP 20
 Tests: PASS — 131 passed, 1 skipped.
 Lint: PASS.
 Build: PASS.
-Diff-check: PASS before final report commit; rerun before commit.
+Diff-check: PASS.  
 Secret scan: PASS — no real secret found; synthetic fixtures are limited to tests.
 Runtime artifact scan: PASS — no tracked runtime stores, logs, screenshots, source maps, or tarballs.
 Release smoke: PASS — installed RC `/healthz`, `/version`, `/ui`, catalog refresh, `/v1/models`, one real short inference, and Requests record.
-Worktree: pending final commit/push.
+Worktree: clean after the report seal commit.
 
 ## 【Known Issues】
 
@@ -182,4 +182,4 @@ Worktree: pending final commit/push.
 
 ## 【Release Decision】
 
-`V1.0 BLOCKED` until the final commit is pushed and the required GitHub Actions checks are green. If all remote checks pass with no new finding, update this line to `V1.0 READY` and seal G13.
+`V1.0 READY`
