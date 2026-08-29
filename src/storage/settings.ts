@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { atomicWriteJson } from "../util/atomicWrite.js";
 import type { MergeMode, ProviderPolicy } from "../config.js";
 
 export interface ControlSettings {
@@ -23,9 +23,6 @@ export class JsonSettingsStore {
   }
 
   save(settings: ControlSettings): void {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ version: 1, settings }, null, 2) + "\n", "utf8");
-    renameSync(temporary, this.path);
+    atomicWriteJson(this.path, { version: 1, settings });
   }
 }

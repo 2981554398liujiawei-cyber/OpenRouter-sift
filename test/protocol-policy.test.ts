@@ -4,7 +4,7 @@ import { createServer, request as nodeRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../src/config";
+import { isolatedConfig } from "./helpers";
 import { startServer } from "../src/server";
 import { JsonPolicyStore } from "../src/storage/policies";
 
@@ -33,12 +33,9 @@ describe("per-model policy protocol injection", () => {
         return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
       }) as typeof fetch;
 
-      const cfg = loadConfig({});
-      cfg.port = 0;
-      cfg.model_policy_store_path = storePath;
-      cfg.settings_store_path = join(directory, "settings.json");
-      cfg.upstream_api_key = "test-key";
-      cfg.log_level = "silent";
+      const dir = mkdtempSync(join(tmpdir(), "openrouter-control-"));
+tempDirs.push(dir);
+const cfg = isolatedConfig(dir, { port: 0, model_policy_store_path: storePath, settings_store_path: join(directory, "settings.json"), upstream_api_key: "test-key", log_level: "silent" });
       const server = startServer(cfg);
       servers.push(server);
       await once(server, "listening");
@@ -80,12 +77,9 @@ describe("per-model policy protocol injection", () => {
         received.push(JSON.parse(String(init?.body)));
         return new Response("{}", { headers: { "content-type": "application/json" } });
       }) as typeof fetch;
-      const cfg = loadConfig({});
-      cfg.port = 0;
-      cfg.model_policy_store_path = storePath;
-      cfg.settings_store_path = join(directory, "settings.json");
-      cfg.upstream_api_key = "test-key";
-      cfg.log_level = "silent";
+      const dir = mkdtempSync(join(tmpdir(), "openrouter-control-"));
+tempDirs.push(dir);
+const cfg = isolatedConfig(dir, { port: 0, model_policy_store_path: storePath, settings_store_path: join(directory, "settings.json"), upstream_api_key: "test-key", log_level: "silent" });
       const server = startServer(cfg);
       await once(server, "listening");
       const address = server.address();
@@ -116,14 +110,9 @@ describe("per-model policy protocol injection", () => {
         },
       }), { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
-    const cfg = loadConfig({});
-    cfg.port = 0;
-    cfg.policy = { only: ["relace"], allow_fallbacks: false };
-    cfg.upstream_api_key = "test-key";
-    cfg.log_level = "silent";
-    const directory = mkdtempSync(join(tmpdir(), "openrouter-control-"));
-    tempDirs.push(directory);
-    cfg.settings_store_path = join(directory, "settings.json");
+    const dir = mkdtempSync(join(tmpdir(), "openrouter-control-"));
+tempDirs.push(dir);
+const cfg = isolatedConfig(dir, { port: 0, policy: { only: ["relace"], allow_fallbacks: false }, upstream_api_key: "test-key", log_level: "silent" });
     const server = startServer(cfg);
     servers.push(server);
     await once(server, "listening");
@@ -146,14 +135,9 @@ describe("per-model policy protocol injection", () => {
       const encoder = new TextEncoder();
       return new Response(new ReadableStream({ start(controller) { controller.enqueue(encoder.encode("event: response.completed\ndata: {}\n\n")); controller.close(); } }), { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
-    const cfg = loadConfig({});
-    cfg.port = 0;
-    cfg.policy = { only: ["relace"] };
-    cfg.upstream_api_key = "test-key";
-    cfg.log_level = "silent";
-    const directory = mkdtempSync(join(tmpdir(), "openrouter-control-"));
-    tempDirs.push(directory);
-    cfg.settings_store_path = join(directory, "settings.json");
+    const dir = mkdtempSync(join(tmpdir(), "openrouter-control-"));
+tempDirs.push(dir);
+const cfg = isolatedConfig(dir, { port: 0, policy: { only: ["relace"] }, upstream_api_key: "test-key", log_level: "silent" });
     const server = startServer(cfg);
     servers.push(server);
     await once(server, "listening");
@@ -177,10 +161,9 @@ describe("per-model policy protocol injection", () => {
         },
       }), { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
-    const cfg = loadConfig({});
-    cfg.port = 0;
-    cfg.upstream_api_key = "test-key";
-    cfg.log_level = "silent";
+    const dir = mkdtempSync(join(tmpdir(), "openrouter-control-"));
+tempDirs.push(dir);
+const cfg = isolatedConfig(dir, { port: 0, upstream_api_key: "test-key", log_level: "silent" });
     const server = startServer(cfg);
     servers.push(server);
     await once(server, "listening");
@@ -201,10 +184,9 @@ describe("per-model policy protocol injection", () => {
       received.push(JSON.parse(String(init?.body)));
       return new Response("{}", { headers: { "content-type": "application/json" } });
     }) as typeof fetch;
-    const cfg = loadConfig({});
-    cfg.port = 0;
-    cfg.upstream_api_key = "test-key";
-    cfg.log_level = "silent";
+    const dir = mkdtempSync(join(tmpdir(), "openrouter-control-"));
+tempDirs.push(dir);
+const cfg = isolatedConfig(dir, { port: 0, upstream_api_key: "test-key", log_level: "silent" });
     const server = startServer(cfg);
     servers.push(server);
     await once(server, "listening");
@@ -228,10 +210,9 @@ describe("per-model policy protocol injection", () => {
         reject(signal.reason);
       }, { once: true });
     })) as typeof fetch;
-    const cfg = loadConfig({});
-    cfg.port = 0;
-    cfg.upstream_api_key = "test-key";
-    cfg.log_level = "silent";
+    const dir = mkdtempSync(join(tmpdir(), "openrouter-control-"));
+tempDirs.push(dir);
+const cfg = isolatedConfig(dir, { port: 0, upstream_api_key: "test-key", log_level: "silent" });
     const server = startServer(cfg);
     servers.push(server);
     await once(server, "listening");

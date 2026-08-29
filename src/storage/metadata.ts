@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { atomicWriteJson } from "../util/atomicWrite.js";
 import type { EndpointDto } from "../openrouter/endpoints.js";
 import type { ModelDto } from "../openrouter/models.js";
 
@@ -47,9 +47,6 @@ export class JsonMetadataStore {
   }
 
   private persist(): void {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.tmp`;
-    writeFileSync(temporary, JSON.stringify(this.data, null, 2) + "\n", "utf8");
-    renameSync(temporary, this.path);
+    atomicWriteJson(this.path, this.data);
   }
 }

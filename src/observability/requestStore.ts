@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { atomicWriteJson } from "../util/atomicWrite.js";
 import type { RequestRecord, RequestRecordUpdate } from "./requestRecord.js";
 
 interface RequestLogFile { version: 1; records: RequestRecord[]; }
@@ -42,10 +42,7 @@ export class JsonRequestLogStore {
   clear(): number { const deleted = this.records.length; this.records = []; return deleted; }
 
   persist(): void {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ version: 1, records: this.records }, null, 2) + "\n", "utf8");
-    renameSync(temporary, this.path);
+    atomicWriteJson(this.path, { version: 1, records: this.records });
   }
 
   private prune(): void { if (this.records.length > this.limit) this.records.splice(0, this.records.length - this.limit); }

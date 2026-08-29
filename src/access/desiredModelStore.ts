@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { atomicWriteJson } from "../util/atomicWrite.js";
 import { providerFilterConfigSchema } from "../providerFilters/schema.js";
 import type { ProviderFilterConfig } from "../providerFilters/types.js";
 
@@ -76,9 +76,6 @@ export class JsonDesiredModelStore {
   }
 
   private persist(): void {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ version: 1, models: this.models }, null, 2) + "\n", "utf8");
-    renameSync(temporary, this.path);
+    atomicWriteJson(this.path, { version: 1, models: this.models });
   }
 }

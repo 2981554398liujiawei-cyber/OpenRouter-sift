@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../src/config";
+import { isolatedConfig } from "./helpers";
 import { startServer } from "../src/server";
 import { NoopSecureStore } from "../src/auth/secureStore";
 const noopSecureStore = new NoopSecureStore();
@@ -30,14 +30,7 @@ describe("management API", () => {
         upstreamBodies.push(JSON.parse(String(init?.body)));
         return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
       }) as typeof fetch;
-      const cfg = loadConfig({});
-      cfg.port = 0;
-      cfg.upstream_api_key = "sk-or-1234";
-      cfg.policy = { ignore: ["global-provider"] };
-      cfg.model_policy_store_path = join(directory, "policies.json");
-      cfg.metadata_cache_path = join(directory, "metadata.json");
-      cfg.settings_store_path = join(directory, "settings.json");
-      cfg.log_level = "silent";
+      const cfg = isolatedConfig(directory, { upstream_api_key: "sk-or-1234", policy: { ignore: ["global-provider"] } });
       const server = startServer(cfg, { secureStore: noopSecureStore });
       servers.push(server);
       await once(server, "listening");
@@ -76,10 +69,8 @@ describe("management API", () => {
   });
 
   it("validates policy input and keeps keys masked and API routes same-origin", async () => {
-    const cfg = loadConfig({});
-    cfg.port = 0;
-    cfg.upstream_api_key = "sk-or-very-secret";
-    cfg.log_level = "silent";
+    const directory2 = mkdtempSync(join(tmpdir(), "openrouter-management-auth-"));
+    const cfg = isolatedConfig(directory2, { upstream_api_key: "sk-or-very-secret" });
     const server = startServer(cfg, { secureStore: noopSecureStore });
     servers.push(server);
     await once(server, "listening");

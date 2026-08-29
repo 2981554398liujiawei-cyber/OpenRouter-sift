@@ -1,6 +1,5 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { mkdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { atomicWriteJson } from "../util/atomicWrite.js";
 import { ModelPolicySchema, type ModelPolicy } from "../policy/modelPolicy.js";
 
 interface PolicyFile {
@@ -41,9 +40,6 @@ export class JsonPolicyStore {
   }
 
   private persist(): void {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ version: 1, models: this.policies }, null, 2) + "\n", "utf8");
-    renameSync(temporary, this.path);
+    atomicWriteJson(this.path, { version: 1, models: this.policies });
   }
 }

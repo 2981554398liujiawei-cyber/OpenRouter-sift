@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { atomicWriteJson } from "../util/atomicWrite.js";
 import { randomUUID } from "node:crypto";
 import { accessKeyLast4, accessKeyPrefix, createAccessKeySecret, hashAccessKey, isLocalAccessKeySecret, verifyAccessKey } from "./crypto.js";
 import { modelOverridesSchema, validateModelOverrides, type ModelOverrides } from "./schema.js";
@@ -113,9 +113,6 @@ export class JsonAccessKeyStore {
   }
 
   private persist(): void {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ version: 1, keys: this.keys }, null, 2) + "\n", "utf8");
-    renameSync(temporary, this.path);
+    atomicWriteJson(this.path, { version: 1, keys: this.keys });
   }
 }

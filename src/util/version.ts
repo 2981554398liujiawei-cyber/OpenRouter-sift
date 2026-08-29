@@ -28,14 +28,14 @@ export function getVersion(): string {
         return null;
       }
     })(),
-  ].filter(Boolean) as string[];
+  ].filter((item): item is string => Boolean(item));
 
   for (const pkgPath of pathsToTry) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-      if (pkg.version) {
+      if (typeof pkg.version === "string" && pkg.version) {
         cachedVersion = pkg.version;
-        return cachedVersion;
+        return pkg.version;
       }
     } catch {
       // Try next path
