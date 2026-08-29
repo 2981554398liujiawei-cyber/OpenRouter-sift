@@ -1,6 +1,7 @@
 # G12 Security Report — OpenRouter Sift
 
 Date: 2026-08-29  
+Release candidate: `1.0.0-rc.1`  
 Decision: **V1.0 BLOCKED**
 
 ## Threat model

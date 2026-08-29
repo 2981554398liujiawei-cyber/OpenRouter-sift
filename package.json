@@ -1,6 +1,6 @@
 {
   "name": "openrouter-provider-shim",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.1",
   "description": "OpenRouter Sift — local control plane for OpenRouter: manage desired models, provider filters, API keys and routing from a browser UI, with verified Codex / Claude Code / OpenCode support.",
   "type": "module",
   "bin": {

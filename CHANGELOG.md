@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 — planned release
+## 1.0.0-rc.1 — release candidate
 
 ### Core features
 

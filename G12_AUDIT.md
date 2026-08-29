@@ -1,6 +1,7 @@
 # G12 Audit — Security / Release Readiness
 
 Date: 2026-08-29
+Release candidate: `1.0.0-rc.1`
 Audit target: working tree based on `3e22cdc` plus the uncommitted package/CI changes. The user-supplied `9c14b6c` baseline does not match this checkout, so conclusions use the inspected tree.
 
 Severity: P0 = secret disclosure, authorization bypass, provider-boundary bypass, or remote control; P1 = release/security blocker; P2 = important but not core-security blocking; P3 = polish/maintenance.
