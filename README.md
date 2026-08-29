@@ -1,6 +1,29 @@
-# openrouter-provider-shim
+# OpenRouter Sift
 
-Local npx-runnable shim that enforces OpenRouter provider routing (e.g., Fireworks-only) for AI agent tools that cannot configure it natively. **Primarily for Claude Code** and **Droid** - other tools like OpenCode and OpenHands have native OpenRouter provider support.
+Local gateway between AI coding tools (Claude Code, Codex CLI, OpenCode, …) and OpenRouter. It enforces Desired-Model permissions and provider-routing policy server-side, issues scoped **Local Access Keys** for `/v1/*`, and ships a browser control plane at `/ui`.
+
+The npm package name is still `openrouter-provider-shim` (release packaging is deferred); the commands in [Quick Start](#quick-start) use a checkout directly.
+
+```
+OpenRouter
+   ↓
+OpenRouter Sift   (local gateway + control UI at /ui)
+   ↓
+Local Access Keys (sift_sk_…, scoped per key)
+   ↓
+Codex / Claude Code / OpenCode / any OpenAI- or Anthropic-compatible client
+```
+
+## Core Concepts
+
+| Concept | Meaning |
+|---|---|
+| **All Models** | The full OpenRouter catalog, browsable and searchable from the control UI. |
+| **Desired Models** | The subset you actually route through Sift. Inference is fail-closed to this set. |
+| **Provider Filters** | Per-Desired-Model hard rules (routing ID, price, quantization, telemetry) evaluated against live endpoint snapshots. |
+| **API Keys** | Local Access Keys (`sift_sk_…`) that clients use; each key only reaches its assigned Desired Models. |
+| **Provider Access** | Per-key allowlist/blocklist/order overrides layered on top of the model's own routing policy. |
+| **Requests** | Metadata-only request history: routing decision trace, status, latency, enriched usage/cost when OpenRouter provides it. |
 
 ## Why this shim exists
 
@@ -19,31 +42,45 @@ OpenRouter supports a `provider` object for routing preferences including `only`
 - **Privacy-first logging**: Logs metadata only, never prompt content
 - **Cross-platform**: Works on macOS, Linux, and Windows
 
-## Installation
-
-```bash
-# Run without installing
-npx openrouter-provider-shim serve --port 8787 --provider-only fireworks --sort throughput --no-fallbacks
-
-# Or install globally
-npm install -g openrouter-provider-shim
-openrouter-provider-shim serve --port 8787
-```
-
 ## Quick Start
 
-### OpenRouter Control UI
-
-From a checkout, install once and start the local proxy plus the UI asset watcher:
+Verified against a clean checkout:
 
 ```bash
 npm install
-npm run dev
+npm run build
+OPENROUTER_API_KEY=sk-or-v1-… npm start   # serves http://127.0.0.1:8787
 ```
 
-Open [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui). Set `OPENROUTER_API_KEY` (or pass `--upstream-key`) before refreshing the model catalog. The API key is intentionally configured outside the browser UI and is never returned to it.
+Then:
 
-For a built checkout, use `npm run build` followed by `npm start`.
+1. Open [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui).
+2. Click **Refresh catalog** — the model directory uses OpenRouter's public API, so it works even before an upstream key is configured; inference requires the key.
+3. Add a model to **Desired Models**, create an **API Key** for it, and point your client at `http://127.0.0.1:8787/v1` with the `sift_sk_…` key.
+
+Minimal smoke test once a key exists (use your own key; it is shown only once at creation):
+
+```bash
+curl http://127.0.0.1:8787/v1/models -H "Authorization: Bearer sift_sk_YOUR_KEY"
+
+curl http://127.0.0.1:8787/v1/chat/completions -H "Authorization: Bearer sift_sk_YOUR_KEY" -H "Content-Type: application/json" -d '{"model":"<a-desired-model-id>","max_tokens":16,"messages":[{"role":"user","content":"Reply only: OK"}]}'
+```
+
+## Security
+
+- **Local by default.** The server binds `127.0.0.1`; do not expose it to a network without understanding the consequences.
+- **Upstream key stays out of the browser and off disk.** `OPENROUTER_API_KEY` is read from the environment (or startup options) only; the UI shows its masked form and never accepts key writes at runtime.
+- **Local key plaintext is one-time.** `sift_sk_…` is displayed once at creation; disk stores a SHA-256 digest, key prefix, and last four characters.
+- **Managed keys are inference-only.** A `sift_sk_…` key is rejected on `/api/*` and `/ui/*` with `MANAGED_KEY_CONTROL_PLANE_FORBIDDEN`.
+- **Control-plane authentication is opt-in.** Without `SHIM_LOCAL_API_KEY`, `/api/*` and `/ui` are open to local processes (localhost trust). When `SHIM_LOCAL_API_KEY` is set, both the management API *and* the static `/ui` page require its `Bearer` header — a plain browser cannot open the UI in that mode, so the setting targets headless/unattended deployments.
+
+## Privacy
+
+Request records are metadata-only. Sift never persists prompts, responses, reasoning, or tool arguments, and upstream error bodies are stored only as sanitized summaries. The OpenRouter upstream key and Local Access Key plaintext never appear in logs, the request store, or the metadata cache.
+
+## Client Notes (carried over, not re-verified with live inference in this stage)
+
+The setups below come from earlier project stages. They describe the intended wiring, but the live harness smoke tests for this stage are still pending — treat them as guidance, not verified instructions.
 
 ### Claude Code
 
@@ -61,7 +98,7 @@ claude
 ```
 
 
-### Known Limitations
+### Rate limiting notes
 
 **Rate limiting:** The shim includes automatic retry with custom backoff delays for Claude Code (detected by its use of the Anthropic Messages API). Retries use delays: 1s, 2s, 4s, 8s, 12s, 18s, 24s, 32s. If you hit rate limits:
 - Add your own Fireworks API key to OpenRouter (BYOK) at https://openrouter.ai/settings/integrations
@@ -403,6 +440,13 @@ curl http://127.0.0.1:8787/v1/responses \
     "input": "Hello from responses"
   }'
 ```
+
+## Known Limitations
+
+- Live harness smoke tests for Codex, Claude Code, and OpenCode (and Cursor) were not re-verified against real OpenRouter inference at this stage; the client notes above are carried over from earlier project stages.
+- "Actual provider", token usage, and cost appear on a request only after OpenRouter's generation-metadata enrichment completes; without it the field reports Unknown and inference is unaffected.
+- Setting `SHIM_LOCAL_API_KEY` blocks plain-browser access to `/ui` (see Security).
+- Request history is a JSON file with a default retention of 1000 records; there is no database backend.
 
 ## License
 
