@@ -193,12 +193,16 @@ function parseMaxPrice(value: string | undefined): ProviderPolicy["max_price"] |
 }
 
 function getVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-    return pkg.version ?? "unknown";
-  } catch {
-    return "unknown";
+  // src/config.ts → ../package.json; bundled dist/server/cli.js → ../../package.json
+  for (const relative of ["../package.json", "../../package.json"]) {
+    try {
+      const pkg = JSON.parse(readFileSync(new URL(relative, import.meta.url), "utf8"));
+      if (typeof pkg.version === "string") return pkg.version;
+    } catch {
+      // Try the next candidate location.
+    }
   }
+  return "unknown";
 }
 
 export interface CliOptions {
