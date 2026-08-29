@@ -1,10 +1,11 @@
 {
   "name": "openrouter-provider-shim",
   "version": "0.1.0",
-  "description": "Local npx shim that injects OpenRouter provider routing for Claude Code and OpenAI-compatible harnesses",
+  "description": "OpenRouter Sift — local control plane for OpenRouter: manage desired models, provider filters, API keys and routing from a browser UI, with verified Codex / Claude Code / OpenCode support.",
   "type": "module",
   "bin": {
-    "openrouter-provider-shim": "./dist/server/cli.js"
+    "openrouter-sift": "dist/server/cli.js",
+    "openrouter-provider-shim": "dist/server/cli.js"
   },
   "engines": {
     "node": ">=18.17.0"
@@ -48,8 +49,22 @@
     "openai",
     "proxy",
     "provider-routing",
-    "shim"
+    "shim",
+    "control-plane",
+    "local-first",
+    "sift"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2981554398liujiawei-cyber/OpenRouter-sift.git"
+  },
+  "homepage": "https://github.com/2981554398liujiawei-cyber/OpenRouter-sift",
+  "bugs": {
+    "url": "https://github.com/2981554398liujiawei-cyber/OpenRouter-sift/issues"
+  }
 }

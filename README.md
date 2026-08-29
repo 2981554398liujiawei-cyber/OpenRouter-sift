@@ -77,17 +77,17 @@ Servers, CI, and automation can skip the UI and set `OPENROUTER_API_KEY` in the 
 - **Local by default.** The server binds `127.0.0.1`; do not expose it to a network without understanding the consequences.
 - **The backend owns the upstream secret.** The browser may submit an OpenRouter key to the localhost backend, but the backend never returns the plaintext — responses carry a `••••abcd`-style mask and the source ("secure-store", "ui-session", "environment"). "Remember" writes to the OS credential store (Windows Credential Manager / macOS Keychain / Secret Service); session-only keys live in server memory and disappear on restart. Nothing is ever written as plaintext to the JSON stores.
 - **Local key plaintext is one-time.** `sift_sk_…` is displayed once at creation; disk stores a SHA-256 digest, key prefix, and last four characters.
-- **Managed keys are inference-only.** A `sift_sk_…` key is rejected on `/api/*` and `/ui/*` with `MANAGED_KEY_CONTROL_PLANE_FORBIDDEN`.
+- **Managed keys are inference-only.** A `sift_sk_…` key is rejected on `/api/*` with `MANAGED_KEY_CONTROL_PLANE_FORBIDDEN`; static UI assets remain public and contain no secrets.
 - **Environment keys remain supported.** `OPENROUTER_API_KEY` is the headless fallback: UI-configured keys override it at runtime, and forgetting them restores it.
-- **Control-plane authentication is opt-in.** Without `SHIM_LOCAL_API_KEY`, `/api/*` and `/ui` are open to local processes (localhost trust). When `SHIM_LOCAL_API_KEY` is set, both the management API *and* the static `/ui` page require its `Bearer` header — a plain browser cannot open the UI in that mode, so the setting targets headless/unattended deployments.
+- **Control-plane authentication is opt-in.** Without `SHIM_LOCAL_API_KEY`, `/api/*` is available to local processes under the localhost trust model. When it is set, static `/ui` assets still load normally; the UI prompts for **Control Key** after its first protected API request and keeps that key in memory only. A `sift_sk_…` Local Access Key is never a Control Key.
 
 ## Privacy
 
 Request records are metadata-only. Sift never persists prompts, responses, reasoning, or tool arguments, and upstream error bodies are stored only as sanitized summaries. The OpenRouter upstream key and Local Access Key plaintext never appear in logs, the request store, or the metadata cache.
 
-## Client Notes (carried over, not re-verified with live inference in this stage)
+## Client Notes (verified in the G11 harness)
 
-The setups below come from earlier project stages. They describe the intended wiring, but the live harness smoke tests for this stage are still pending — treat them as guidance, not verified instructions.
+The Codex, Claude Code, and OpenCode setup paths below were verified in the G11 harness. Cursor remains manual/unverified and is not claimed as a supported verified harness.
 
 ### Claude Code
 
@@ -450,9 +450,9 @@ curl http://127.0.0.1:8787/v1/responses \
 
 ## Known Limitations
 
-- Live harness smoke tests for Codex, Claude Code, and OpenCode (and Cursor) were not re-verified against real OpenRouter inference at this stage; the client notes above are carried over from earlier project stages.
+- Cursor has not been live-tested by this release audit; do not treat it as a verified client.
 - "Actual provider", token usage, and cost appear on a request only after OpenRouter's generation-metadata enrichment completes; without it the field reports Unknown and inference is unaffected.
-- Setting `SHIM_LOCAL_API_KEY` blocks plain-browser access to `/ui` (see Security).
+- With `SHIM_LOCAL_API_KEY`, the browser loads `/ui` and must enter the Control Key to use `/api`; the key is not persisted in browser storage.
 - Request history is a JSON file with a default retention of 1000 records; there is no database backend.
 
 ## License
