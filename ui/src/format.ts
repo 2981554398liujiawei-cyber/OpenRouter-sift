@@ -1,4 +1,9 @@
 import type { PolicyMode, RequestListItem } from "./types";
+import type { Locale } from "./i18n";
+import { en } from "./i18n/en";
+import { zhCN } from "./i18n/zh-CN";
+
+const copy = (locale: Locale) => locale === "zh-CN" ? zhCN : en;
 
 export function display(value: string | number | null | undefined): string {
   return value === null || value === undefined || value === "" ? "—" : String(value);
@@ -22,8 +27,9 @@ export function policyLabel(mode: PolicyMode): string {
   return { inherit: "Inherit", allowlist: "Allowlist", blocklist: "Blocklist", custom: "Custom" }[mode];
 }
 
-export function protocolLabel(protocol: string): string {
-  return ({ anthropic_messages: "Anthropic Messages", chat_completions: "Chat Completions", responses: "Responses" } as Record<string, string>)[protocol] ?? protocol;
+export function protocolLabel(protocol: string, locale: Locale = "en"): string {
+  const labels = copy(locale);
+  return ({ anthropic_messages: labels["format.anthropic"], chat_completions: labels["format.chatCompletions"], responses: labels["format.responses"] } as Record<string, string>)[protocol] ?? protocol;
 }
 
 export function formatDuration(ms: number | null | undefined): string {
@@ -46,12 +52,12 @@ export function formatCost(value: number | null | undefined): string {
   return `$${value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
 }
 
-export function requestStatus(value: RequestListItem["status"], cancelled?: boolean | null): { label: string; className: string } {
-  if (cancelled) return { label: "Cancelled", className: "cancelled" };
+export function requestStatus(value: RequestListItem["status"], cancelled?: boolean | null, locale: Locale = "en"): { label: string; className: string } {
+  if (cancelled) return { label: copy(locale)["format.cancelled"], className: "cancelled" };
   const code = Number(value);
   if (Number.isFinite(code) && code >= 200 && code < 400) return { label: String(code), className: "success" };
   if (Number.isFinite(code)) return { label: String(code), className: "failure" };
-  return { label: display(value), className: "unknown" };
+  return { label: display(value) || copy(locale)["format.unknown"], className: "unknown" };
 }
 
 const errorExplanations: Record<string, string> = {
@@ -60,7 +66,8 @@ const errorExplanations: Record<string, string> = {
   MODEL_NOT_ALLOWED: "The requested model is not enabled for this API key.",
 };
 
-export function explainError(code: string | null | undefined): string | null {
+export function explainError(code: string | null | undefined, locale: Locale = "en"): string | null {
   if (!code) return null;
-  return errorExplanations[code] ?? "The request could not be completed. Check the routing trace below.";
+  const labels = copy(locale);
+  return ({ NO_ELIGIBLE_PROVIDER: labels["format.noEligibleProvider"], FILTER_DATA_STALE: labels["format.filterDataStale"], MODEL_NOT_ALLOWED: labels["format.modelNotAllowed"] } as Record<string, string>)[code] ?? labels["format.requestFailed"];
 }

@@ -2,6 +2,13 @@
 
 ## 1.0.0-rc.1 — release candidate
 
+### G13 closure
+
+- Added relevance-ranked All Models search across names, IDs, creators, and descriptions.
+- Reworked Desired Model detail into a Provider Console with server-evaluated eligible/excluded rows, provider diagnostics, and UI-only comparison controls.
+- Added English / Simplified Chinese switching with responsive layouts and truthful client/setup documentation.
+- Added reproducible package prepacking and clean tarball install smoke coverage.
+
 ### Core features
 
 - Local OpenRouter gateway for Anthropic Messages, Chat Completions, and Responses APIs.

@@ -2,7 +2,7 @@
 
 Local gateway between AI coding tools (Claude Code, Codex CLI, OpenCode, …) and OpenRouter. It enforces Desired-Model permissions and provider-routing policy server-side, issues scoped **Local Access Keys** for `/v1/*`, and ships a browser control plane at `/ui`.
 
-The npm package name is still `openrouter-provider-shim` (release packaging is deferred); the commands in [Quick Start](#quick-start) use a checkout directly.
+The npm package name remains `openrouter-provider-shim` for compatibility; the product and CLI are branded **OpenRouter Sift**, with `openrouter-sift` as the preferred command and the legacy binary retained as an alias.
 
 ```
 OpenRouter
@@ -368,11 +368,11 @@ The API returns a stable DTO and does not expose cached raw metadata. Provider d
 
 ### Control UI and management API (G3/G4)
 
-The same local server serves the React control interface at `/ui` and management API at `/api/*`; neither affects proxy routes under `/v1/*`. The Models view searches the local catalog, loads endpoint metadata on demand, and shows unavailable OpenRouter metrics as `—`. The policy editor uses a server-side preview, so the displayed provider JSON is compiled by the same resolver that handles proxy traffic.
+The same local server serves the React control interface at `/ui` and management API at `/api/*`; neither affects proxy routes under `/v1/*`. **All Models** uses relevance-ranked search across model name, ID, creator, and description, while preserving the selected sort for ties. Desired Model detail opens a single Provider Console with server-evaluated eligibility, visible excluded rows, provider search, quantization/percentile/sort controls, and expandable endpoint diagnostics. The UI can be switched between English and Simplified Chinese; the preference is kept locally, while control credentials remain memory-only in the browser.
 
 The UI supports `inherit`, allowlist, and blocklist policies. Allowlist ordering uses the verified `providerRoutingId` from endpoint metadata, and an empty allowlist cannot be saved. The Policies page can reset an entry by deleting the model-specific policy, returning it to global/inherit behavior.
 
-Settings persist merge mode, global policy, and metadata cache TTL. The configured API-key state is display-only: runtime key updates are deliberately rejected, so use environment variables or startup options instead.
+Settings persist merge mode, global policy, metadata cache TTL, and request history limits. The **OpenRouter API Key** panel verifies and stores the key through the backend: **Remember on this device** uses the OS credential store, while session-only mode keeps it in server memory. The browser never receives the plaintext key. `OPENROUTER_API_KEY` remains the headless fallback, and forgetting a UI key restores that fallback.
 
 ### Request observability (G5)
 

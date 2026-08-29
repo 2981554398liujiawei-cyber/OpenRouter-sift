@@ -78,7 +78,7 @@ export interface DesiredModel {
   providerFilter?: ProviderFilterConfig | null;
 }
 
-export type FilterOperator = "lte" | "gte" | "eq" | "in" | "contains" | "exists";
+export type FilterOperator = "lte" | "gte" | "eq" | "in" | "notIn" | "contains" | "exists";
 export interface ProviderFilterCondition {
   id: string;
   field: string;

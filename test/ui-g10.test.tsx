@@ -63,7 +63,7 @@ describe("G10 navigation and information architecture", () => {
     install(baseFixtures);
     render(<App />);
     fireEvent.click(navButton("Desired Models"));
-    expect(await screen.findByText("No Desired Models")).toBeTruthy();
+    expect(await screen.findByText("No Desired Models yet")).toBeTruthy();
     fireEvent.click(screen.getByText("Browse All Models"));
     expect(await screen.findByRole("heading", { name: "All Models" })).toBeTruthy();
     fireEvent.click(navButton("API Keys"));
@@ -145,7 +145,7 @@ describe("G10 navigation and information architecture", () => {
     fireEvent.click(navButton("Settings"));
     expect((await screen.findByLabelText("Configured OpenRouter API key") as HTMLInputElement).value).toBe("••••abcd");
     expect(screen.getByDisplayValue("300")).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("Models catalog TTL"), { target: { value: "120" } });
+    fireEvent.change(screen.getByLabelText("Models catalog TTL (seconds)"), { target: { value: "120" } });
     fireEvent.change(screen.getByLabelText("Request history limit"), { target: { value: "2000" } });
     fireEvent.click(screen.getByText("Override"));
     fireEvent.click(screen.getByText("Save Changes"));

@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 
 /**
@@ -9,9 +10,14 @@ import { dirname } from "node:path";
  */
 export function atomicWriteJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.tmp`;
-  writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  const temporary = `${path}.${randomBytes(16).toString("hex")}.tmp`;
+  writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
   try { chmodSync(temporary, 0o600); } catch { /* Windows: no-op */ }
-  renameSync(temporary, path);
+  try {
+    renameSync(temporary, path);
+  } catch (error) {
+    try { unlinkSync(temporary); } catch { /* preserve the original error */ }
+    throw error;
+  }
   try { chmodSync(path, 0o600); } catch { /* Windows: no-op */ }
 }

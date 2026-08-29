@@ -20,6 +20,7 @@ describe("Desired Model provider filters UI", () => {
       else if (url.includes("/filter/preview")) body = { modelId: "deepseek/demo", totalEndpoints: 1, eligibleEndpoints: [{ endpoint: { providerName: "Relace", providerRoutingId: "relace" }, eligible: true, reasons: [] }], excludedEndpoints: [], eligibleRoutingIds: ["relace"], evaluatedAt: new Date().toISOString(), metadataFetchedAt: new Date().toISOString(), metadataState: "fresh", usable: true, failureReason: null };
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<App />);
     fireEvent.click(await screen.findByText("Desired Models"));
     fireEvent.click(await screen.findByText("DeepSeek Demo"));

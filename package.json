@@ -14,6 +14,8 @@
     "build": "npm run build:ui && npm run build:server",
     "build:server": "tsup src/cli.ts --format esm --dts --clean --out-dir dist/server",
     "build:ui": "vite build",
+    "prepack": "npm run build",
+    "pack:smoke": "node scripts/pack-smoke.mjs",
     "dev": "concurrently -k \"npm run dev:server\" \"npm run dev:ui\"",
     "dev:server": "npm run build:server && node --watch dist/server/cli.js serve --port 8787",
     "dev:ui": "vite build --watch",
@@ -57,7 +59,11 @@
   "author": "",
   "license": "MIT",
   "files": [
-    "dist"
+    "dist/server",
+    "dist/ui",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "repository": {
     "type": "git",

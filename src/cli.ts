@@ -7,8 +7,8 @@ import { getVersion } from "./util/version.js";
 const program = new Command();
 
 program
-  .name("openrouter-provider-shim")
-  .description("Local shim for OpenRouter provider routing (Claude Code + OpenAI-compatible harnesses)")
+  .name("openrouter-sift")
+  .description("OpenRouter Sift local gateway and control plane")
   .version(getVersion());
 
 // Default/serve command
@@ -50,7 +50,7 @@ program
     try {
       const cfg = loadConfig(opts);
       startServer(cfg);
-      console.log(`openrouter-provider-shim v${cfg._runtime.version} listening on http://${cfg.host}:${cfg.port}`);
+      console.log(`openrouter-sift v${cfg._runtime.version} listening on http://${cfg.host}:${cfg.port}`);
     } catch (err: any) {
       console.error("Error:", err.message);
       process.exit(1);

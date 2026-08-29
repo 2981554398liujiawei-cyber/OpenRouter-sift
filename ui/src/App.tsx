@@ -7,19 +7,25 @@ import { DesiredModelsPage } from "./pages/DesiredModelsPage";
 import { ModelDetailPage } from "./pages/ModelDetailPage";
 import { RequestsPage } from "./pages/RequestsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { LocaleProvider, LocaleSwitcher, useI18n } from "./i18n";
 import type { CatalogCache, DesiredModel, ModelSummary } from "./types";
 
 type Page = "models" | "desired" | "keys" | "requests" | "settings";
 
-const navItems: Array<{ id: Page; label: string }> = [
-  { id: "models", label: "All Models" },
-  { id: "desired", label: "Desired Models" },
-  { id: "keys", label: "API Keys" },
-  { id: "requests", label: "Requests" },
-  { id: "settings", label: "Settings" },
+const navItems: Array<{ id: Page; key: "nav.allModels" | "nav.desiredModels" | "nav.apiKeys" | "nav.requests" | "nav.settings" }> = [
+  { id: "models", key: "nav.allModels" },
+  { id: "desired", key: "nav.desiredModels" },
+  { id: "keys", key: "nav.apiKeys" },
+  { id: "requests", key: "nav.requests" },
+  { id: "settings", key: "nav.settings" },
 ];
 
 export function App() {
+  return <LocaleProvider><AppContent /></LocaleProvider>;
+}
+
+function AppContent() {
+  const { t } = useI18n();
   const [page, setPage] = useState<Page>("models");
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [desiredModels, setDesiredModels] = useState<DesiredModel[]>([]);
@@ -73,10 +79,10 @@ export function App() {
 
   const refreshModels = async () => {
     try {
-      setNotice("Refreshing model catalog…");
+      setNotice(t("catalog.refreshing"));
       await api.refreshModels();
       await loadModels();
-      setNotice("Model catalog refreshed.");
+      setNotice(t("catalog.refreshed"));
     } catch (err) { setError((err as Error).message); }
   };
 
@@ -85,28 +91,30 @@ export function App() {
   // "configured" only means an upstream key exists — it never implies a verified
   // live connection, so the label must reflect actual metadata sync state.
   let openrouterStatus: { label: string; className: string; detail?: string; title?: string };
-  if (!status?.openrouter.configured) openrouterStatus = { label: "API key needed", className: "status warn", title: "Set OPENROUTER_API_KEY to reach OpenRouter." };
-  else if (status.openrouter.lastError) openrouterStatus = { label: "Metadata issue", className: "status warn", detail: "last sync failed", title: status.openrouter.lastError };
+  if (!status?.openrouter.configured) openrouterStatus = { label: t("status.apiKeyNeeded"), className: "status warn", title: t("status.setApiKeyHint") };
+  else if (status.openrouter.lastError) openrouterStatus = { label: t("status.metadataIssue"), className: "status warn", detail: t("status.lastSyncFailed"), title: status.openrouter.lastError };
   else if (status.openrouter.lastSuccessfulMetadataRequestAt) {
     const ageMinutes = Math.floor((Date.now() - Date.parse(status.openrouter.lastSuccessfulMetadataRequestAt)) / 60000);
-    openrouterStatus = { label: "Metadata OK", className: "status good", detail: Number.isFinite(ageMinutes) && ageMinutes >= 0 ? `last sync ${ageMinutes === 0 ? "<1m" : `${ageMinutes}m`} ago` : undefined };
-  } else openrouterStatus = { label: "Key configured", className: "status good", title: "Upstream key configured; no metadata sync yet." };
+    const age = ageMinutes === 0 ? "<1m" : `${ageMinutes}m`;
+    openrouterStatus = { label: t("status.metadataOk"), className: "status good", detail: Number.isFinite(ageMinutes) && ageMinutes >= 0 ? t("status.lastSync", { age }) : undefined };
+  } else openrouterStatus = { label: t("status.keyConfigured"), className: "status good", title: t("status.upstreamKeyHint") };
   const openModel = (id: string) => { setSelectedId(id); setSelectedDesired(false); setPage("models"); setError(null); };
   const openDesiredModel = (id: string) => { setSelectedId(id); setSelectedDesired(true); setPage("desired"); setError(null); };
 
   return <div className="shell">
     <aside className="sidebar">
       <button className="brand" onClick={() => go("models")}>OpenRouter <strong>Sift</strong></button>
-      <nav className="sidebar-nav" aria-label="Primary navigation">
-        {navItems.map((item) => <button key={item.id} className={page === item.id && !selectedId ? "nav-active" : ""} aria-current={page === item.id && !selectedId ? "page" : undefined} onClick={() => go(item.id)}>{item.label}</button>)}
+      <nav className="sidebar-nav" aria-label={t("nav.primary")}>
+        {navItems.map((item) => <button key={item.id} className={page === item.id && !selectedId ? "nav-active" : ""} aria-current={page === item.id && !selectedId ? "page" : undefined} onClick={() => go(item.id)}>{t(item.key)}</button>)}
       </nav>
-      <div className="sidebar-status" aria-label="Service status">
+      <div className="sidebar-status" aria-label={t("status.service")}>
         <span className={openrouterStatus.className} title={openrouterStatus.title}>OpenRouter {openrouterStatus.label}{openrouterStatus.detail ? <small> · {openrouterStatus.detail}</small> : null}</span>
-        <span className={status?.proxy.running ? "status good" : "status"}>Proxy {status?.proxy.running ? "Running" : "Unknown"}</span>
+        <span className={status?.proxy.running ? "status good" : "status"}>{t("status.proxy")} {status?.proxy.running ? t("status.running") : t("status.unknown")}</span>
       </div>
     </aside>
     <main className="content" key={contentNonce}>
-      {(notice || error) && <div className={error ? "message error" : "message"} role="status">{error ?? notice}<button aria-label="Dismiss message" onClick={() => { setError(null); setNotice(null); }}>×</button></div>}
+      <div className="content-topbar"><LocaleSwitcher /></div>
+      {(notice || error) && <div className={error ? "message error" : "message"} role="status">{error ?? notice}<button aria-label={t("common.dismiss")} onClick={() => { setError(null); setNotice(null); }}>×</button></div>}
       {selectedId ? (
         selectedDesired
           ? <DesiredModelDetail modelId={selectedId} models={models} onBack={() => { setSelectedId(null); setSelectedDesired(false); }} setNotice={setNotice} setError={setError} />
@@ -123,10 +131,10 @@ export function App() {
         <SettingsPage onOpenModel={openModel} onKeySaved={() => void loadModels()} setNotice={setNotice} setError={setError} />
       )}
     </main>
-    {!unlocked && <div className="modal-backdrop"><section className="modal panel unlock-modal" role="dialog" aria-label="Unlock Control Plane" aria-modal="true">
-      <div className="panel-title"><div><h2>Unlock Control Plane</h2><p>This instance requires a control key. It is kept in memory only for this session.</p></div></div>
-      <label className="modal-field">Control key<input type="password" autoFocus value={unlockKey} onChange={(event) => setUnlockKey(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") unlock(); }} placeholder="Control key" /></label>
-      <div className="actions"><button className="button" disabled={!unlockKey.trim()} onClick={unlock}>Unlock</button></div>
+    {!unlocked && <div className="modal-backdrop"><section className="modal panel unlock-modal" role="dialog" aria-label={t("control.unlock")} aria-modal="true">
+      <div className="panel-title"><div><h2>{t("control.unlock")}</h2><p>{t("control.description")}</p></div></div>
+      <label className="modal-field">{t("control.key")}<input type="password" autoFocus value={unlockKey} onChange={(event) => setUnlockKey(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") unlock(); }} placeholder={t("control.key")} /></label>
+      <div className="actions"><button className="button" disabled={!unlockKey.trim()} onClick={unlock}>{t("control.unlockAction")}</button></div>
     </section></div>}
   </div>;
 }

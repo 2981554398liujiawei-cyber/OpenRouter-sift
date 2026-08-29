@@ -2,6 +2,7 @@ import type { AccessKey, AccessKeySecret, CatalogCache, DesiredModel, Endpoint, 
 import type { AccessKeyRoutingData, KeyModelRouting } from "./AccessKeyRouting";
 
 type ApiError = { error?: { message?: string; code?: string } };
+type ProviderFilterResponse = { filter: ProviderFilterConfig | null; preview: FilterPreview | null };
 
 let controlKey: string | null = null;
 let unauthorizedHandler: (() => void) | null = null;
@@ -54,8 +55,8 @@ export const api = {
   desiredModels: () => request<{ items: DesiredModel[] } | DesiredModel[]>("/desired-models"),
   addDesiredModel: (id: string) => request<DesiredModel>(`/desired-models/${encodeURIComponent(id)}`, { method: "POST" }),
   removeDesiredModel: (id: string) => request<unknown>(`/desired-models/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  desiredFilter: (id: string) => request<ProviderFilterConfig | { providerFilter: ProviderFilterConfig | null } | null>(`/desired-models/${encodeURIComponent(id)}/filter`),
-  saveDesiredFilter: (id: string, filter: ProviderFilterConfig) => request<ProviderFilterConfig>(`/desired-models/${encodeURIComponent(id)}/filter`, { method: "PUT", body: JSON.stringify(filter) }),
+  desiredFilter: (id: string) => request<ProviderFilterResponse | ProviderFilterConfig | { providerFilter: ProviderFilterConfig | null } | null>(`/desired-models/${encodeURIComponent(id)}/filter`),
+  saveDesiredFilter: (id: string, filter: ProviderFilterConfig) => request<ProviderFilterResponse | ProviderFilterConfig>(`/desired-models/${encodeURIComponent(id)}/filter`, { method: "PUT", body: JSON.stringify(filter) }),
   deleteDesiredFilter: (id: string) => request<unknown>(`/desired-models/${encodeURIComponent(id)}/filter`, { method: "DELETE" }),
   previewDesiredFilter: (id: string, candidateFilter: ProviderFilterConfig) => request<FilterPreview>(`/desired-models/${encodeURIComponent(id)}/filter/preview`, { method: "POST", body: JSON.stringify({ candidateFilter }) }),
   accessKeys: () => request<{ items: AccessKey[] } | AccessKey[]>("/access-keys"),

@@ -1,9 +1,17 @@
 import type { IncomingMessage } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 
 export interface ValidationError {
   code: string;
   message: string;
   status: number;
+}
+
+function secretsEqual(provided: string, expected: string): boolean {
+  const providedBytes = Buffer.from(provided, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+  if (providedBytes.length !== expectedBytes.length) return false;
+  return timingSafeEqual(providedBytes, expectedBytes);
 }
 
 export function validateLocalAuth(
@@ -23,7 +31,7 @@ export function validateLocalAuth(
     providedKey = xApiKey;
   }
 
-  if (providedKey !== localApiKey) {
+  if (!providedKey || !secretsEqual(providedKey, localApiKey)) {
     return {
       code: "ERR_UNAUTHORIZED",
       message: "Unauthorized: invalid or missing local API key",

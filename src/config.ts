@@ -132,8 +132,8 @@ const ShimConfigSchema = z.object({
   desired_model_store_path: z.string().default(resolve(process.cwd(), "openrouter-control-desired-models.json")),
   access_key_store_path: z.string().default(resolve(process.cwd(), "openrouter-control-access-keys.json")),
 
-  request_timeout_ms: z.number().default(600000),
-  max_body_bytes: z.number().default(50 * 1024 * 1024),
+  request_timeout_ms: z.number().finite().int().min(1_000).max(30 * 60 * 1_000).default(600000),
+  max_body_bytes: z.number().finite().int().min(1).max(100 * 1024 * 1024).default(50 * 1024 * 1024),
   add_attribution_headers: z.boolean().default(false),
   attribution: z.object({
     referer: z.string().optional(),
