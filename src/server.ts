@@ -1,6 +1,6 @@
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
-import { readJsonBody, writeJson, writeError, pipeFetchResponse, getInboundAuth } from "./util/http.js";
+import { readJsonBody, writeJson, writeError, pipeFetchResponse, getInboundAuth, SECURITY_HEADERS } from "./util/http.js";
 import { applyResolvedProviderPolicy, resolveProviderPolicy } from "./policy/resolver.js";
 import { ModelPolicySchema, type ModelPolicy } from "./policy/modelPolicy.js";
 import { validateLocalAuth, validateMethod } from "./policy/validation.js";
@@ -335,6 +335,7 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
         const origin = req.headers.origin;
         if (origin && isLoopbackOrigin(origin)) {
           res.writeHead(204, {
+            ...SECURITY_HEADERS,
             "access-control-allow-origin": origin,
             "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
             "access-control-allow-headers": "authorization, content-type, x-api-key",
@@ -342,7 +343,7 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
             vary: "Origin",
           });
         } else {
-          res.writeHead(204);
+          res.writeHead(204, SECURITY_HEADERS);
         }
         res.end();
         return;
@@ -808,10 +809,10 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
           return writeError(res, 400, err.message, "ERR_INVALID_BODY");
         }
 
-        // Log body if configured
+        // Log only a redacted shape if configured. Even debug logging must not
+        // persist prompt, response, reasoning, or tool contents.
         if (cfg.log_body) {
-          const bodyToLog = cfg.redact_body ? redactBody(body) : body;
-          log.debug({ body: bodyToLog }, "request body");
+          log.debug({ body: redactBody(body) }, "request body");
         }
         
         // Debug: log model name and tools for troubleshooting
@@ -860,7 +861,7 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
             if (cfg.log_level === "debug") {
               log.debug({ 
                 originalLength: body.metadata.user_id.length,
-                truncated: body.metadata.user_id.slice(0, 128)
+                truncated: "[REDACTED]"
               }, "truncating user_id");
             }
             body.metadata.user_id = body.metadata.user_id.slice(0, 128);
@@ -995,7 +996,7 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
             log.debug({ 
               url: upstream, 
               bodySize: requestBody.length,
-              bodyPreview: cfg.redact_body ? JSON.stringify(redactBody(body)).slice(0, 1000) : requestBody.slice(0, 1000),
+              bodyPreview: JSON.stringify(redactBody(body)).slice(0, 1000),
             }, "upstream request body");
           }
           
@@ -1022,9 +1023,11 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
               finishObservation({ status: null, clientCancelled: true, error: { code: "ERR_CLIENT_CANCELLED", message: "Client disconnected" } });
               return;
             }
-            log.error({ err: err.message, upstream }, "upstream request failed");
-            finishObservation({ status: 502, clientCancelled: abortReason === "client", error: safeObservationError(err, abortReason === "timeout" ? "ERR_UPSTREAM_TIMEOUT" : "ERR_UPSTREAM_FAILED") });
-            return writeError(res, 502, `Upstream request failed: ${err.message}`, "ERR_UPSTREAM_FAILED");
+            const safe = safeObservationError(err, abortReason === "timeout" ? "ERR_UPSTREAM_TIMEOUT" : "ERR_UPSTREAM_FAILED");
+            log.error({ err: safe.message, upstream }, "upstream request failed");
+            finishObservation({ status: 502, clientCancelled: abortReason === "client", error: safe });
+            const status = safe.code === "ERR_UPSTREAM_TIMEOUT" ? 504 : 502;
+            return writeError(res, status, `Upstream request failed: ${safe.message}`, safe.code);
           }
         }
       } finally {
@@ -1073,10 +1076,10 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
       // Only write error response if headers haven't been sent yet
       // (e.g., if piping already started, we can't send an error)
       if (!res.headersSent) {
-        writeError(res, 500, msg, "ERR_INTERNAL");
+        writeError(res, 500, safeObservationError(err, "ERR_INTERNAL").message, "ERR_INTERNAL");
       }
       finishObservation({ status: res.headersSent ? null : 500, clientCancelled: res.destroyed, error: safeObservationError(err, "ERR_INTERNAL") });
-      log.error({ ms, err: msg, path: url.pathname, headersSent: res.headersSent }, "error");
+      log.error({ ms, err: safeObservationError(err, "ERR_INTERNAL").message, path: url.pathname, headersSent: res.headersSent }, "error");
     }
   });
 

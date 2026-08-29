@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { safeResponseBodyForLogging } from "../src/server";
+import { redactBody } from "../src/util/redact";
 
 const nativeFetch = globalThis.fetch;
 const servers: ReturnType<typeof startServer>[] = [];
@@ -36,5 +37,17 @@ describe("configuration privacy", () => {
   it("redacts JSON response bodies and omits non-JSON bodies when redaction is enabled", () => {
     expect(safeResponseBodyForLogging('{"api_key":"secret","content":"ok"}', true)).toContain("[REDACTED]");
     expect(safeResponseBodyForLogging("data: sensitive", true)).toContain("omitted");
+  });
+
+  it("never keeps prompt or tool content in debug-log redaction", () => {
+    const redacted = JSON.stringify(redactBody({
+      messages: [{ role: "user", content: "SUPER_SECRET_PROMPT_G12" }],
+      reasoning: "SUPER_SECRET_REASONING_G12",
+      tools: [{ function: { arguments: "SUPER_SECRET_TOOL_ARGS_G12" } }],
+    }));
+    expect(redacted).not.toContain("SUPER_SECRET_PROMPT_G12");
+    expect(redacted).not.toContain("SUPER_SECRET_REASONING_G12");
+    expect(redacted).not.toContain("SUPER_SECRET_TOOL_ARGS_G12");
+    expect(redacted).toContain("[REDACTED_CONTENT]");
   });
 });

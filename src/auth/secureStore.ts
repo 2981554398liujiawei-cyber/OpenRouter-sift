@@ -67,17 +67,22 @@ class WindowsCredentialStore implements SecureKeyStore {
       $credential.Flags = 0
       $credential.Type = 1
       $credential.TargetName = $target
-      $credential.UserName = ${valueLiteral}
+      $credential.UserName = '${ACCOUNT}'
+      $credential.CredentialBlob = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni(${valueLiteral})
+      $credential.CredentialBlobSize = [Text.Encoding]::Unicode.GetByteCount(${valueLiteral})
       $credential.Persist = 2
       $credential.AttributeCount = 0
-      if (-not [CredMan]::CredWrite([ref]$credential, 0)) { throw "CredWrite failed with $([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }`,
+      try {
+        if (-not [CredMan]::CredWrite([ref]$credential, 0)) { throw "CredWrite failed with $([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+      } finally { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($credential.CredentialBlob) }`,
       action === "read" && `
       $ptr = [IntPtr]::Zero
       $size = 0
       if (-not [CredMan]::CredRead($target, 1, 0, [ref]$ptr, [ref]$size)) { exit 2 }
       try {
         $cred = [Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [type][CredMan+CREDENTIAL])
-        [Console]::Out.Write($cred.UserName)
+        $text = [Runtime.InteropServices.Marshal]::PtrToStringUni($cred.CredentialBlob, [Math]::Floor($cred.CredentialBlobSize / 2))
+        [Console]::Out.Write($text)
       } finally { [CredMan]::CredFree($ptr) }`,
       action === "delete" && `
       if (-not [CredMan]::CredDelete($target, 1, 0)) { exit 2 }`,

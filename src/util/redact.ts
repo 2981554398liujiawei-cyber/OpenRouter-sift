@@ -27,10 +27,10 @@ export function redactBody(body: any): any {
         } else if (k === "messages" || k === "input") {
           // Keep messages/input but redact any nested sensitive fields
           result[k] = redact(v);
-        } else if (k === "content" && typeof v === "string") {
-          // Keep content but truncate if very long
-          const str = v as string;
-          result[k] = str.length > 1000 ? str.slice(0, 1000) + "...[truncated]" : str;
+        } else if (["content", "input", "messages", "reasoning", "tools", "tool_calls", "arguments"].includes(lowerK) || lowerK.includes("reasoning")) {
+          // Prompt, response and tool payloads are never log-safe. Keep only
+          // the shape of these fields so debug logging cannot persist content.
+          result[k] = "[REDACTED_CONTENT]";
         } else {
           result[k] = redact(v);
         }

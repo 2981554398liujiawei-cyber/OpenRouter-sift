@@ -57,7 +57,7 @@ export interface PipeResult { completed: boolean; clientCancelled: boolean; }
 export async function pipeFetchResponse(upstreamResp: Response, res: ServerResponse, signal?: AbortSignal): Promise<PipeResult> {
   // Pass through key headers only. Avoid forwarding content-length if streaming.
   const ct = upstreamResp.headers.get("content-type") ?? "application/json";
-  const headers: Record<string, string> = { "content-type": ct };
+  const headers: Record<string, string> = { "content-type": ct, ...SECURITY_HEADERS };
 
   const cache = upstreamResp.headers.get("cache-control");
   if (cache) headers["cache-control"] = cache;
