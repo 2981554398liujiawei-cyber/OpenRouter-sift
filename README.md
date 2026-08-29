@@ -49,14 +49,16 @@ Verified against a clean checkout:
 ```bash
 npm install
 npm run build
-OPENROUTER_API_KEY=sk-or-v1-… npm start   # serves http://127.0.0.1:8787
+npm start   # serves http://127.0.0.1:8787
 ```
 
 Then:
 
 1. Open [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui).
-2. Click **Refresh catalog** — the model directory uses OpenRouter's public API, so it works even before an upstream key is configured; inference requires the key.
+2. Go to **Settings → OpenRouter**, paste your OpenRouter API key, and click **Save Key**. Sift verifies the key against OpenRouter before storing it; "Remember on this device" keeps it in the OS credential store, unchecking it keeps it for the current session only.
 3. Add a model to **Desired Models**, create an **API Key** for it, and point your client at `http://127.0.0.1:8787/v1` with the `sift_sk_…` key.
+
+The model catalog uses OpenRouter's public API, so browsing works before a key is configured; inference requires the key.
 
 Minimal smoke test once a key exists (use your own key; it is shown only once at creation):
 
@@ -66,12 +68,17 @@ curl http://127.0.0.1:8787/v1/models -H "Authorization: Bearer sift_sk_YOUR_KEY"
 curl http://127.0.0.1:8787/v1/chat/completions -H "Authorization: Bearer sift_sk_YOUR_KEY" -H "Content-Type: application/json" -d '{"model":"<a-desired-model-id>","max_tokens":16,"messages":[{"role":"user","content":"Reply only: OK"}]}'
 ```
 
+### Headless / advanced configuration
+
+Servers, CI, and automation can skip the UI and set `OPENROUTER_API_KEY` in the environment at startup. The Settings UI still works alongside it: a key saved from the UI takes priority until forgotten, after which Sift falls back to the environment variable.
+
 ## Security
 
 - **Local by default.** The server binds `127.0.0.1`; do not expose it to a network without understanding the consequences.
-- **Upstream key stays out of the browser and off disk.** `OPENROUTER_API_KEY` is read from the environment (or startup options) only; the UI shows its masked form and never accepts key writes at runtime.
+- **The backend owns the upstream secret.** The browser may submit an OpenRouter key to the localhost backend, but the backend never returns the plaintext — responses carry a `••••abcd`-style mask and the source ("secure-store", "ui-session", "environment"). "Remember" writes to the OS credential store (Windows Credential Manager / macOS Keychain / Secret Service); session-only keys live in server memory and disappear on restart. Nothing is ever written as plaintext to the JSON stores.
 - **Local key plaintext is one-time.** `sift_sk_…` is displayed once at creation; disk stores a SHA-256 digest, key prefix, and last four characters.
 - **Managed keys are inference-only.** A `sift_sk_…` key is rejected on `/api/*` and `/ui/*` with `MANAGED_KEY_CONTROL_PLANE_FORBIDDEN`.
+- **Environment keys remain supported.** `OPENROUTER_API_KEY` is the headless fallback: UI-configured keys override it at runtime, and forgetting them restores it.
 - **Control-plane authentication is opt-in.** Without `SHIM_LOCAL_API_KEY`, `/api/*` and `/ui` are open to local processes (localhost trust). When `SHIM_LOCAL_API_KEY` is set, both the management API *and* the static `/ui` page require its `Bearer` header — a plain browser cannot open the UI in that mode, so the setting targets headless/unattended deployments.
 
 ## Privacy
