@@ -42,7 +42,19 @@ export class RequestTracker {
     readonly store: JsonRequestLogStore,
     private readonly logger: Logger,
     private readonly generationClient?: OpenRouterClient,
-  ) {}
+  ) {
+    // Restart recovery: enrichment jobs are in-memory, so a record that was
+    // still awaiting its generation lookup when the process died stays
+    // "pending" forever. Re-queue those records with a shortened patience so
+    // the UI eventually resolves them instead of showing "Resolving…" forever.
+    if (generationClient) {
+      for (const record of store.list({ limit: 100 }).items) {
+        if (record.generationId && record.enrichmentStatus === "pending") {
+          this.queue.enqueue(async () => this.enrich(record.id, record.generationId!, true));
+        }
+      }
+    }
+  }
 
   begin(protocol: RequestProtocol): string {
     const id = `req_${randomUUID()}`;
@@ -73,7 +85,7 @@ export class RequestTracker {
       try { this.store.persist(); } catch (error) { this.logger.error({ err: safeError(error).message }, "request history persistence failed"); }
     });
   }
-  private async enrich(id: string, generationId: string): Promise<void> {
+  private async enrich(id: string, generationId: string, restartRecovery = false): Promise<void> {
     try {
       let raw: unknown;
       for (let attempt = 0; ; attempt++) {
@@ -83,7 +95,9 @@ export class RequestTracker {
           // OpenRouter's generation index is eventually consistent: a just-finished
           // generation can answer 404 for a while, so poll 404s much longer than
           // transient upstream errors before recording enrichment as failed.
-          if (status === 404 && attempt < GENERATION_404_POLL_DELAYS_MS.length) {
+          // Records recovered from a previous process get no such patience:
+          // their generation is already minutes old, so a single retry suffices.
+          if (status === 404 && attempt < GENERATION_404_POLL_DELAYS_MS.length && !restartRecovery) {
             await new Promise((resolve) => setTimeout(resolve, GENERATION_404_POLL_DELAYS_MS[attempt]));
             continue;
           }
