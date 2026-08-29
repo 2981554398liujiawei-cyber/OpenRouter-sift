@@ -2,6 +2,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
 import { extname, isAbsolute, relative, resolve } from "node:path";
+import { SECURITY_HEADERS } from "./util/http.js";
 
 const contentTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -15,8 +16,10 @@ const contentTypes: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
+const UI_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+
 function notFound(res: ServerResponse): void {
-  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+  res.writeHead(404, { "content-type": "text/plain; charset=utf-8", ...SECURITY_HEADERS });
   res.end("Control UI asset not found");
 }
 
@@ -24,12 +27,12 @@ function notFound(res: ServerResponse): void {
 export function serveControlUi(req: IncomingMessage, res: ServerResponse, pathname: string, outputDirectory: string): boolean {
   if (pathname !== "/ui" && !pathname.startsWith("/ui/")) return false;
   if (req.method !== "GET" && req.method !== "HEAD") {
-    res.writeHead(405, { allow: "GET, HEAD" });
+    res.writeHead(405, { allow: "GET, HEAD", ...SECURITY_HEADERS });
     res.end();
     return true;
   }
   if (pathname === "/ui") {
-    res.writeHead(302, { location: "/ui/" });
+    res.writeHead(302, { location: "/ui/", ...SECURITY_HEADERS });
     res.end();
     return true;
   }
@@ -76,6 +79,8 @@ export function serveControlUi(req: IncomingMessage, res: ServerResponse, pathna
   res.writeHead(200, {
     "content-type": contentTypes[extension] ?? "application/octet-stream",
     "cache-control": extension === ".html" ? "no-cache" : "public, max-age=31536000, immutable",
+    ...SECURITY_HEADERS,
+    ...(extension === ".html" ? { "content-security-policy": UI_CSP } : {}),
   });
   if (req.method === "HEAD") {
     res.end();

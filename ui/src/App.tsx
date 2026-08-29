@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "./api";
+import { api, onControlUnauthorized, setControlKey } from "./api";
 import { DesiredModelDetail } from "./DesiredModelDetail";
 import { AllModelsPage } from "./pages/AllModelsPage";
 import { ApiKeysPage } from "./pages/ApiKeysPage";
@@ -29,6 +29,17 @@ export function App() {
   const [status, setStatus] = useState<{ proxy: { running: boolean; host?: string; port?: number }; openrouter: { configured: boolean; lastSuccessfulMetadataRequestAt?: string | null; lastError?: string | null }; catalog?: { modelCount: number; fetchedAt: string | null; stale: boolean }; version?: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [unlocked, setUnlocked] = useState(true);
+  const [unlockKey, setUnlockKey] = useState("");
+  const [contentNonce, setContentNonce] = useState(0);
+
+  useEffect(() => {
+    // A control key configured on the server (SHIM_LOCAL_API_KEY) makes /api/*
+    // require a Bearer token. The static UI still loads; this handler surfaces
+    // the unlock screen instead of a wall of 401 errors (G12 §13).
+    onControlUnauthorized(() => setUnlocked(false));
+    return () => onControlUnauthorized(null);
+  }, []);
 
   const loadModels = async () => {
     try {
@@ -40,6 +51,17 @@ export function App() {
       setStatus(nextStatus);
       setDesiredModels(Array.isArray(nextDesired) ? nextDesired : Array.isArray(nextDesired?.items) ? nextDesired.items : []);
     } catch (err) { setError((err as Error).message); }
+  };
+
+  const unlock = () => {
+    const key = unlockKey.trim();
+    if (!key) return;
+    setControlKey(key);
+    setUnlockKey("");
+    setUnlocked(true);
+    setError(null);
+    void loadModels(); // refetch shell data with the control key attached
+    setContentNonce((value) => value + 1); // remount current page so it refetches with auth
   };
 
   useEffect(() => { void loadModels(); }, []);
@@ -83,7 +105,7 @@ export function App() {
         <span className={status?.proxy.running ? "status good" : "status"}>Proxy {status?.proxy.running ? "Running" : "Unknown"}</span>
       </div>
     </aside>
-    <main className="content">
+    <main className="content" key={contentNonce}>
       {(notice || error) && <div className={error ? "message error" : "message"} role="status">{error ?? notice}<button aria-label="Dismiss message" onClick={() => { setError(null); setNotice(null); }}>×</button></div>}
       {selectedId ? (
         selectedDesired
@@ -101,5 +123,10 @@ export function App() {
         <SettingsPage onOpenModel={openModel} onKeySaved={() => void loadModels()} setNotice={setNotice} setError={setError} />
       )}
     </main>
+    {!unlocked && <div className="modal-backdrop"><section className="modal panel unlock-modal" role="dialog" aria-label="Unlock Control Plane" aria-modal="true">
+      <div className="panel-title"><div><h2>Unlock Control Plane</h2><p>This instance requires a control key. It is kept in memory only for this session.</p></div></div>
+      <label className="modal-field">Control key<input type="password" autoFocus value={unlockKey} onChange={(event) => setUnlockKey(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") unlock(); }} placeholder="Control key" /></label>
+      <div className="actions"><button className="button" disabled={!unlockKey.trim()} onClick={unlock}>Unlock</button></div>
+    </section></div>}
   </div>;
 }

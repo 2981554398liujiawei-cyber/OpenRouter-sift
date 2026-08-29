@@ -1,5 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+export const SECURITY_HEADERS: Record<string, string> = {
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "x-frame-options": "DENY",
+};
+
 export async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<any> {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -21,7 +27,9 @@ export async function readJsonBody(req: IncomingMessage, maxBytes: number): Prom
   try {
     return JSON.parse(raw);
   } catch {
-    throw new Error("Invalid JSON body");
+    const e: any = new Error("Invalid JSON body");
+    e.code = "ERR_INVALID_JSON";
+    throw e;
   }
 }
 
@@ -30,6 +38,7 @@ export function writeJson(res: ServerResponse, status: number, obj: any): void {
   res.writeHead(status, {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(body),
+    ...SECURITY_HEADERS,
   });
   res.end(body);
 }

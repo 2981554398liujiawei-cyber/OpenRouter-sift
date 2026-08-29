@@ -260,6 +260,7 @@ textarea { min-height: 130px; resize: vertical; font: 12px/1.5 var(--mono); }
 .secret-warning { font-weight: 650; color: var(--warning); }
 .secret-value { display: block; padding: 14px; margin: 18px 0; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-s); overflow-wrap: anywhere; font: 13px/1.5 var(--mono); }
 .key-routing { width: min(720px, 100%); max-height: min(92vh, 860px); overflow: auto; }
+.unlock-modal { width: min(420px, 100%); }
 .key-routing .provider-picker { max-width: none; }
 .access-summary { display: flex; flex-direction: column; gap: 4px; margin: 14px 0 4px; padding: 12px 14px; background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-s); font-size: 13.5px; color: var(--text-muted); }
 .access-summary strong { color: var(--text); }

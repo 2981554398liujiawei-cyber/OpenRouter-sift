@@ -1,16 +1,30 @@
 import type { AccessKey, AccessKeySecret, CatalogCache, DesiredModel, Endpoint, FilterPreview, ModelSummary, ProviderFilterConfig, ProviderFilterCondition, ProviderPolicy, RequestListItem, RequestRecord, Settings, UpstreamKeyStatus } from "./types";
 import type { AccessKeyRoutingData, KeyModelRouting } from "./AccessKeyRouting";
 
-type ApiError = { error?: { message?: string } };
+type ApiError = { error?: { message?: string; code?: string } };
+
+let controlKey: string | null = null;
+let unauthorizedHandler: (() => void) | null = null;
+
+/**
+ * Control-key state lives in memory only (G12 §14): never in the URL, never in
+ * localStorage, never in a cookie. A page refresh clears it, which is fine —
+ * the server remains the only authority.
+ */
+export function setControlKey(key: string | null): void { controlKey = key; }
+export function hasControlKey(): boolean { return controlKey !== null; }
+export function onControlUnauthorized(handler: (() => void) | null): void { unauthorizedHandler = handler; }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-  });
+  const headers: Record<string, string> = { "content-type": "application/json", ...(init?.headers as Record<string, string> | undefined) };
+  if (controlKey) headers.authorization = `Bearer ${controlKey}`;
+  const response = await fetch(`/api${path}`, { ...init, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as ApiError;
-    throw new Error(body.error?.message ?? `Request failed (${response.status})`);
+    if (response.status === 401 && body.error?.code === "ERR_UNAUTHORIZED") unauthorizedHandler?.();
+    const err = new Error(body.error?.message ?? `Request failed (${response.status})`) as Error & { code?: string };
+    err.code = body.error?.code;
+    throw err;
   }
   return response.json() as Promise<T>;
 }
