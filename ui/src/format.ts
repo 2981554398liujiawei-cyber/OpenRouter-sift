@@ -8,8 +8,14 @@ export function perMillion(pricing: unknown, key: "prompt" | "completion"): stri
   if (!pricing || typeof pricing !== "object") return "—";
   const raw = (pricing as Record<string, unknown>)[key];
   const value = typeof raw === "string" ? Number(raw) : raw;
-  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  // OpenRouter uses -1 for "no fixed price" (e.g. the auto router), which must render as unavailable.
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "—";
   return `$${(value * 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 4 })} / M`;
+}
+
+export function percent(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return `${value.toFixed(2)}%`;
 }
 
 export function policyLabel(mode: PolicyMode): string {

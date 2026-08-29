@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -28,7 +28,7 @@ function seedMetadata(dir: string) {
   const now = new Date().toISOString();
   const file = { version: 1, models: { fetchedAt: now, value: [{ id: "test/model-x", name: "Test Model X", contextLength: 8192, pricing: { prompt: "0.000001", completion: "0.000002" } }], raw: { data: [] } }, endpoints: { "test/model-x": { fetchedAt: now, value: endpoints, raw: { data: { endpoints: [] } } } } };
   const path = join(dir, "metadata.json");
-  require("node:fs").writeFileSync(path, JSON.stringify(file));
+  writeFileSync(path, JSON.stringify(file));
   return path;
 }
 

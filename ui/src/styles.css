@@ -283,7 +283,7 @@ textarea { min-height: 130px; resize: vertical; font: 12px/1.5 var(--mono); }
   .request-filters { grid-template-columns: 1fr 1fr; }
   .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .catalog-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .catalog-controls > :first-child { grid-column: span 2; }
   .catalog-controls-advanced { grid-template-columns: 1fr 1fr; }
