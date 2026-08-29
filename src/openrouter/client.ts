@@ -1,12 +1,14 @@
 export class OpenRouterMetadataError extends Error {
-  constructor(message: string, readonly status?: number, readonly code: "timeout" | "aborted" | "http" | "invalid_response" | "network" = "network") {
+  constructor(message: string, readonly status?: number, readonly code: "timeout" | "aborted" | "http" | "invalid_response" | "network" | "no_key" = "network") {
     super(message);
     this.name = "OpenRouterMetadataError";
   }
 }
 
 export interface OpenRouterClientOptions {
-  apiKey: string;
+  apiKey?: string;
+  /** Resolved per request so a key rotated at runtime (e.g. saved from the UI) is picked up without a restart. */
+  getApiKey?: () => string | null;
   baseUrl?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -21,6 +23,11 @@ export class OpenRouterClient {
     this.baseUrl = options.baseUrl ?? "https://openrouter.ai/api/v1";
     this.timeoutMs = options.timeoutMs ?? 10_000;
     this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  private apiKeyFor(): string | null {
+    if (this.options.getApiKey) return this.options.getApiKey();
+    return this.options.apiKey ?? null;
   }
 
   async getModels(signal?: AbortSignal): Promise<unknown> {
@@ -39,17 +46,26 @@ export class OpenRouterClient {
 
   async getGeneration(generationId: string, signal?: AbortSignal): Promise<unknown> {
     if (!generationId.trim()) throw new OpenRouterMetadataError("Generation ID is required", undefined, "invalid_response");
-    return this.getJson(`/generation?id=${encodeURIComponent(generationId)}`, signal);
+    return this.getJson(`/generation?id=${encodeURIComponent(generationId)}`, signal, true);
   }
 
-  private async getJson(path: string, externalSignal?: AbortSignal): Promise<unknown> {
+  /** Lightweight authenticated probe used to validate a candidate upstream key before saving it. */
+  async getKeyInfo(signal?: AbortSignal): Promise<unknown> {
+    return this.getJson("/key", signal, true);
+  }
+
+  private async getJson(path: string, externalSignal?: AbortSignal, requireAuth = false): Promise<unknown> {
+    const apiKey = this.apiKeyFor();
+    if (requireAuth && !apiKey) {
+      throw new OpenRouterMetadataError("OpenRouter API key is not configured", undefined, "no_key");
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const abortFromCaller = () => controller.abort(externalSignal?.reason);
     externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
     try {
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        headers: { ...(this.options.apiKey ? { authorization: `Bearer ${this.options.apiKey}` } : {}), accept: "application/json" },
+        headers: { ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), accept: "application/json" },
         signal: controller.signal,
       });
       if (!response.ok) {

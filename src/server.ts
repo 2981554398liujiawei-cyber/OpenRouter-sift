@@ -8,6 +8,8 @@ import { JsonPolicyStore } from "./storage/policies.js";
 import { JsonMetadataStore } from "./storage/metadata.js";
 import { OpenRouterCatalog } from "./openrouter/catalog.js";
 import { OpenRouterClient, OpenRouterMetadataError } from "./openrouter/client.js";
+import { SecureKeyStoreUnavailableError, UpstreamCredentialManager } from "./auth/upstreamCredential.js";
+import { createPlatformSecureStore, type SecureKeyStore } from "./auth/secureStore.js";
 import { makeLogger } from "./util/log.js";
 import { redactBody } from "./util/redact.js";
 import { getVersion } from "./util/version.js";
@@ -71,10 +73,10 @@ function looksLikeOpenRouterKey(auth: string): boolean {
   return key.startsWith("sk-or-");
 }
 
-function getUpstreamAuth(req: IncomingMessage, cfg: ShimConfig): string | undefined {
+function getUpstreamAuth(req: IncomingMessage, cfg: ShimConfig, credentials: UpstreamCredentialManager): string | undefined {
+    const active = credentials.getActiveKey();
   if (cfg.auth_mode === "upstream-key") {
-    if (!cfg.upstream_api_key) return undefined;
-    return `Bearer ${cfg.upstream_api_key}`;
+    return active ? `Bearer ${active}` : undefined;
   }
 
   // passthrough mode with smart substitution
@@ -85,15 +87,15 @@ function getUpstreamAuth(req: IncomingMessage, cfg: ShimConfig): string | undefi
     // substitute it automatically (common case: user has ANTHROPIC_API_KEY set for
     // other tools but wants to use OpenRouter via this shim)
     const isAnthropicKey = looksLikeAnthropicKey(inboundAuth);
-    if (isAnthropicKey && cfg.upstream_api_key) {
-      return `Bearer ${cfg.upstream_api_key}`;
+    if (isAnthropicKey && active) {
+      return `Bearer ${active}`;
     }
     // If it's already an OpenRouter key or some other key, pass it through
     return inboundAuth;
   }
 
-  // No inbound auth, fall back to configured upstream key
-  return cfg.upstream_api_key ? `Bearer ${cfg.upstream_api_key}` : undefined;
+  // No inbound auth, fall back to the active upstream key
+  return active ? `Bearer ${active}` : undefined;
 }
 
 function protocolForPath(pathname: string): RequestProtocol | null {
@@ -188,8 +190,12 @@ function parseApiPolicy(value: unknown): ModelPolicy {
   });
 }
 
-export function startServer(cfg: ShimConfig): http.Server {
+export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyStore } = {}): http.Server {
   const log = makeLogger(cfg);
+  // Single owner of the upstream credential; all OpenRouter consumers resolve
+  // the key per request so a key saved from the UI applies without a restart.
+  const credentials = new UpstreamCredentialManager(cfg.upstream_api_key ?? null, options.secureStore ?? createPlatformSecureStore());
+  const upstreamClient = new OpenRouterClient({ getApiKey: () => credentials.getActiveKey() });
   const modelPolicies = new JsonPolicyStore(cfg.model_policy_store_path);
   try {
     modelPolicies.load();
@@ -197,7 +203,7 @@ export function startServer(cfg: ShimConfig): http.Server {
     log.error({ err: err?.message ?? String(err), path: cfg.model_policy_store_path }, "model policy store unavailable; using global policy only");
   }
   const metadataCatalog = new OpenRouterCatalog(
-    new OpenRouterClient({ apiKey: cfg.upstream_api_key ?? "" }),
+    upstreamClient,
     new JsonMetadataStore(cfg.metadata_cache_path),
   );
   try {
@@ -220,7 +226,7 @@ export function startServer(cfg: ShimConfig): http.Server {
   }
   const requestLogs = new JsonRequestLogStore(cfg.request_log_store_path, controlSettings.requestLogLimit ?? 1000);
   try { requestLogs.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.request_log_store_path }, "request history unavailable; continuing without stored history"); }
-  const requestTracker = new RequestTracker(requestLogs, log, cfg.upstream_api_key ? new OpenRouterClient({ apiKey: cfg.upstream_api_key }) : undefined);
+  const requestTracker = new RequestTracker(requestLogs, log, upstreamClient);
   const desiredModels = new JsonDesiredModelStore(cfg.desired_model_store_path);
   const accessKeys = new JsonAccessKeyStore(cfg.access_key_store_path);
   try { desiredModels.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.desired_model_store_path }, "desired model store unavailable; using an empty desired model set"); }
@@ -345,7 +351,7 @@ export function startServer(cfg: ShimConfig): http.Server {
         try {
           if (url.pathname === "/api/status" && req.method === "GET") {
             const catalogStatus = metadataCatalog.getStatus();
-            return writeJson(res, 200, { proxy: { running: true, host: cfg.host, port: cfg.port }, openrouter: { configured: Boolean(cfg.upstream_api_key), lastSuccessfulMetadataRequestAt: catalogStatus.lastSuccessfulMetadataRequestAt, lastError: catalogStatus.lastError }, catalog: { modelCount: catalogStatus.modelCount, fetchedAt: catalogStatus.fetchedAt, stale: catalogStatus.stale }, version: cfg._runtime.version });
+            return writeJson(res, 200, { proxy: { running: true, host: cfg.host, port: cfg.port }, openrouter: { configured: credentials.getStatus().configured, lastSuccessfulMetadataRequestAt: catalogStatus.lastSuccessfulMetadataRequestAt, lastError: catalogStatus.lastError }, catalog: { modelCount: catalogStatus.modelCount, fetchedAt: catalogStatus.fetchedAt, stale: catalogStatus.stale }, version: cfg._runtime.version });
           }
           if (url.pathname === "/api/models" && req.method === "GET") {
             const snapshot = metadataCatalog.getModelsSnapshot();
@@ -604,13 +610,52 @@ export function startServer(cfg: ShimConfig): http.Server {
             try { requestLogs.persist(); } catch (err: any) { log.error({ err: safeObservationError(err).message }, "request history clear persistence failed"); }
             return writeJson(res, 200, { deleted });
           }
+          if (url.pathname === "/api/settings/openrouter-key" && req.method === "PUT") {
+            let body: Record<string, unknown>;
+            try {
+              body = await readJsonBody(req, cfg.max_body_bytes) as Record<string, unknown>;
+            } catch { return writeError(res, 400, "Invalid request body", "INVALID_REQUEST"); }
+            const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+            if (!apiKey) return writeError(res, 422, "An OpenRouter API key is required.", "INVALID_UPSTREAM_KEY");
+            if (apiKey.length > 512) return writeError(res, 422, "That API key is too long to be valid.", "INVALID_UPSTREAM_KEY");
+            const remember = body.remember !== false;
+            if (body.verify !== false) {
+              try {
+                // /key is the lightweight authenticated probe; /models is public and would accept any key.
+                await new OpenRouterClient({ apiKey, timeoutMs: 10_000 }).getKeyInfo();
+              } catch (err) {
+                if (err instanceof OpenRouterMetadataError && (err.status === 401 || err.status === 403)) {
+                  return writeError(res, 422, "OpenRouter rejected this API key.", "INVALID_UPSTREAM_KEY");
+                }
+                return writeJson(res, 502, { error: { code: "UPSTREAM_UNREACHABLE", message: "Could not verify the key because OpenRouter is unreachable." }, allowUnverified: true });
+              }
+            }
+            if (remember) {
+              try {
+                credentials.setPersistedKey(apiKey);
+              } catch (err) {
+                const detail = err instanceof SecureKeyStoreUnavailableError ? err.message : "Secure credential storage failed";
+                log.error({ err: detail }, "secure upstream key persistence failed");
+                return writeJson(res, 503, { error: { code: "SECURE_STORE_UNAVAILABLE", message: `Could not remember the key securely: ${detail}` }, allowSessionOnly: true });
+              }
+            } else {
+              credentials.setSessionKey(apiKey);
+            }
+            // Confirm metadata access with the new key right away (§24); never block the response on it.
+            void metadataCatalog.syncModels(true).catch(() => undefined);
+            return writeJson(res, 200, { openRouterApiKey: credentials.getStatus() });
+          }
+          if (url.pathname === "/api/settings/openrouter-key" && req.method === "DELETE") {
+            credentials.clearManagedKey();
+            return writeJson(res, 200, { openRouterApiKey: credentials.getStatus() });
+          }
           if (url.pathname === "/api/settings" && req.method === "GET") {
-            return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit(), desiredEndpointRefreshIntervalMs: controlSettings.desiredEndpointRefreshIntervalMs });
+            return writeJson(res, 200, { openRouterApiKey: credentials.getStatus(), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit(), desiredEndpointRefreshIntervalMs: controlSettings.desiredEndpointRefreshIntervalMs });
           }
           if (url.pathname === "/api/settings" && req.method === "PUT") {
             try {
               const update = await readJsonBody(req, cfg.max_body_bytes) as Record<string, unknown>;
-              if (typeof update.openRouterApiKey === "string" && update.openRouterApiKey) return writeError(res, 422, "Runtime OpenRouter API key updates are not supported; configure the key externally.", "API_KEY_EXTERNAL_ONLY");
+              if (typeof update.openRouterApiKey === "string" && update.openRouterApiKey) return writeError(res, 422, "Set the OpenRouter API key through /api/settings/openrouter-key.", "API_KEY_EXTERNAL_ONLY");
               let nextMergeMode = cfg.merge_mode;
               let nextGlobalPolicy = cfg.policy;
               let nextMetadataTtlMs = metadataCatalog.getTtlMs();
@@ -641,10 +686,10 @@ export function startServer(cfg: ShimConfig): http.Server {
               requestTracker.setLimit(nextRequestLogLimit);
               setDesiredRefreshInterval(nextDesiredEndpointRefreshIntervalMs);
               controlSettings = nextSettings;
-              return writeJson(res, 200, { openRouterApiKeyConfigured: Boolean(cfg.upstream_api_key), openRouterApiKeyMasked: maskedKey(cfg.upstream_api_key), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit(), desiredEndpointRefreshIntervalMs: controlSettings.desiredEndpointRefreshIntervalMs });
+              return writeJson(res, 200, { openRouterApiKey: credentials.getStatus(), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit(), desiredEndpointRefreshIntervalMs: controlSettings.desiredEndpointRefreshIntervalMs });
             } catch { return writeError(res, 400, "Invalid settings", "INVALID_SETTINGS"); }
           }
-          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/desired-models" || url.pathname === "/api/access-keys" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || desiredModelMatch || accessKeyMatch || accessKeyOverridesMatch || accessKeyOverridesPreviewMatch || accessKeyOverrideModelMatch || accessKeyOverridePreviewMatch || policyMatch || requestDetailMatch;
+          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/desired-models" || url.pathname === "/api/access-keys" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/settings/openrouter-key" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || desiredModelMatch || accessKeyMatch || accessKeyOverridesMatch || accessKeyOverridesPreviewMatch || accessKeyOverrideModelMatch || accessKeyOverridePreviewMatch || policyMatch || requestDetailMatch;
           return writeError(res, knownRoute ? 405 : 404, knownRoute ? "Method not allowed" : "Management API endpoint not found", knownRoute ? "ERR_METHOD_NOT_ALLOWED" : "API_NOT_FOUND");
         } catch (err) {
           if (err instanceof OpenRouterMetadataError) return metadataError(err);
@@ -679,7 +724,17 @@ export function startServer(cfg: ShimConfig): http.Server {
       }
 
       // Get upstream auth
-      const upstreamAuth = managedAccessKey ? (cfg.upstream_api_key ? `Bearer ${cfg.upstream_api_key}` : undefined) : getUpstreamAuth(req, cfg);
+      let upstreamAuth: string | undefined;
+      if (managedAccessKey) {
+        const active = credentials.getActiveKey();
+        if (!active) {
+          finishObservation({ status: 503, error: { code: "OPENROUTER_KEY_REQUIRED", message: "Configure an OpenRouter API key in Settings." } });
+          return writeError(res, 503, "Configure an OpenRouter API key in Settings.", "OPENROUTER_KEY_REQUIRED");
+        }
+        upstreamAuth = `Bearer ${active}`;
+      } else {
+        upstreamAuth = getUpstreamAuth(req, cfg, credentials);
+      }
       if (!upstreamAuth) {
         finishObservation({ status: 401, error: { code: "ERR_MISSING_AUTH", message: "Missing upstream authentication" } });
         return writeError(res, 401, "Missing upstream authentication", "ERR_MISSING_AUTH");
@@ -837,7 +892,7 @@ export function startServer(cfg: ShimConfig): http.Server {
         log.debug({ 
           authLength: upstreamAuth?.length ?? 0, 
           authScheme: upstreamAuth?.split(/\s+/, 1)[0] ?? "none",
-          upstreamKeyLength: cfg.upstream_api_key?.length ?? 0,
+          upstreamKeyLength: credentials.getActiveKey()?.length ?? 0,
         }, "auth header");
       }
 
