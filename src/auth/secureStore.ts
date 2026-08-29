@@ -197,8 +197,10 @@ class LinuxSecretStore implements SecureKeyStore {
  * Fallback for platforms without a usable credential facility: nothing is
  * persisted at all. The manager surfaces `secureStoreAvailable: false` so the
  * UI can offer session-only configuration instead of pretending to remember.
+ * Tests inject this to isolate spawned servers from the machine's real
+ * persisted upstream key.
  */
-class NoopStore implements SecureKeyStore {
+export class NoopSecureStore implements SecureKeyStore {
   readonly label = "unavailable";
   available(): boolean { return false; }
   load(): string | null { return null; }
@@ -210,7 +212,7 @@ export function createPlatformSecureStore(): SecureKeyStore {
   if (process.platform === "win32") return new WindowsCredentialStore();
   if (process.platform === "darwin") return new MacKeychainStore();
   if (process.platform === "linux") return new LinuxSecretStore();
-  return new NoopStore();
+  return new NoopSecureStore();
 }
 
 export { SERVICE as CREDENTIAL_SERVICE, ACCOUNT as CREDENTIAL_ACCOUNT };

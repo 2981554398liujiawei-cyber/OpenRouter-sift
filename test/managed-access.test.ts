@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { NoopSecureStore } from "../src/auth/secureStore";
+const noopSecureStore = new NoopSecureStore();
 
 const nativeFetch = globalThis.fetch;
 const servers: ReturnType<typeof startServer>[] = [];
@@ -28,7 +30,7 @@ describe("managed Local Access Keys", () => {
       cfg.desired_model_store_path = join(directory, "desired.json");
       cfg.access_key_store_path = join(directory, "keys.json");
       cfg.request_log_store_path = join(directory, "requests.json");
-      const server = startServer(cfg); servers.push(server); await once(server, "listening");
+      const server = startServer(cfg, { secureStore: noopSecureStore }); servers.push(server); await once(server, "listening");
       const address = server.address(); if (!address || typeof address === "string") throw new Error("Expected TCP listener");
       const base = `http://127.0.0.1:${address.port}`;
       const controlHeaders = { authorization: "Bearer control-secret", "content-type": "application/json" };
@@ -76,7 +78,7 @@ describe("managed Local Access Keys", () => {
       globalThis.fetch = vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
       const cfg = loadConfig({}); cfg.port = 0; cfg.upstream_api_key = "sk-or-upstream"; cfg.log_level = "silent";
       cfg.desired_model_store_path = join(directory, "desired.json"); cfg.access_key_store_path = join(directory, "keys.json");
-      const server = startServer(cfg); servers.push(server); await once(server, "listening");
+      const server = startServer(cfg, { secureStore: noopSecureStore }); servers.push(server); await once(server, "listening");
       const address = server.address(); if (!address || typeof address === "string") throw new Error("Expected TCP listener"); const base = `http://127.0.0.1:${address.port}`;
       const admin = { "content-type": "application/json" };
       await nativeFetch(`${base}/api/desired-models/openai%2Fallowed`, { method: "POST", headers: admin });

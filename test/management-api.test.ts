@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { NoopSecureStore } from "../src/auth/secureStore";
+const noopSecureStore = new NoopSecureStore();
 
 const nativeFetch = globalThis.fetch;
 const servers: ReturnType<typeof startServer>[] = [];
@@ -36,7 +38,7 @@ describe("management API", () => {
       cfg.metadata_cache_path = join(directory, "metadata.json");
       cfg.settings_store_path = join(directory, "settings.json");
       cfg.log_level = "silent";
-      const server = startServer(cfg);
+      const server = startServer(cfg, { secureStore: noopSecureStore });
       servers.push(server);
       await once(server, "listening");
       const address = server.address();
@@ -78,7 +80,7 @@ describe("management API", () => {
     cfg.port = 0;
     cfg.upstream_api_key = "sk-or-very-secret";
     cfg.log_level = "silent";
-    const server = startServer(cfg);
+    const server = startServer(cfg, { secureStore: noopSecureStore });
     servers.push(server);
     await once(server, "listening");
     const address = server.address();

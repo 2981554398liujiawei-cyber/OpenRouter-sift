@@ -10,6 +10,7 @@ import { JsonPolicyStore } from "../src/storage/policies";
 
 const nativeFetch = globalThis.fetch;
 const servers: ReturnType<typeof createServer>[] = [];
+const tempDirs: string[] = [];
 
 afterEach(async () => {
   globalThis.fetch = nativeFetch;
@@ -17,6 +18,7 @@ afterEach(async () => {
     server.close();
     await once(server, "close");
   }));
+  tempDirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
 });
 
 describe("per-model policy protocol injection", () => {
@@ -34,6 +36,7 @@ describe("per-model policy protocol injection", () => {
       const cfg = loadConfig({});
       cfg.port = 0;
       cfg.model_policy_store_path = storePath;
+      cfg.settings_store_path = join(directory, "settings.json");
       cfg.upstream_api_key = "test-key";
       cfg.log_level = "silent";
       const server = startServer(cfg);
@@ -80,6 +83,7 @@ describe("per-model policy protocol injection", () => {
       const cfg = loadConfig({});
       cfg.port = 0;
       cfg.model_policy_store_path = storePath;
+      cfg.settings_store_path = join(directory, "settings.json");
       cfg.upstream_api_key = "test-key";
       cfg.log_level = "silent";
       const server = startServer(cfg);
@@ -117,6 +121,9 @@ describe("per-model policy protocol injection", () => {
     cfg.policy = { only: ["relace"], allow_fallbacks: false };
     cfg.upstream_api_key = "test-key";
     cfg.log_level = "silent";
+    const directory = mkdtempSync(join(tmpdir(), "openrouter-control-"));
+    tempDirs.push(directory);
+    cfg.settings_store_path = join(directory, "settings.json");
     const server = startServer(cfg);
     servers.push(server);
     await once(server, "listening");
@@ -144,6 +151,9 @@ describe("per-model policy protocol injection", () => {
     cfg.policy = { only: ["relace"] };
     cfg.upstream_api_key = "test-key";
     cfg.log_level = "silent";
+    const directory = mkdtempSync(join(tmpdir(), "openrouter-control-"));
+    tempDirs.push(directory);
+    cfg.settings_store_path = join(directory, "settings.json");
     const server = startServer(cfg);
     servers.push(server);
     await once(server, "listening");
