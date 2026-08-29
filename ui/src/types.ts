@@ -49,9 +49,18 @@ export interface Endpoint {
   };
 }
 
+export type UpstreamKeySource = "ui-session" | "secure-store" | "environment" | "none";
+
+export interface UpstreamKeyStatus {
+  configured: boolean;
+  masked: string | null;
+  source: UpstreamKeySource;
+  secureStoreAvailable: boolean;
+  secureStoreLabel: string;
+}
+
 export interface Settings {
-  openRouterApiKeyConfigured: boolean;
-  openRouterApiKeyMasked: string | null;
+  openRouterApiKey: UpstreamKeyStatus;
   mergeMode: "merge" | "override" | "strict";
   globalPolicy: Record<string, unknown>;
   metadataTtlMs: number;

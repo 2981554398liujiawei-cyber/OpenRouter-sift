@@ -98,7 +98,7 @@ export function App() {
       ) : page === "requests" ? (
         <RequestsPage setNotice={setNotice} setError={setError} />
       ) : (
-        <SettingsPage onOpenModel={openModel} setNotice={setNotice} setError={setError} />
+        <SettingsPage onOpenModel={openModel} onKeySaved={() => void loadModels()} setNotice={setNotice} setError={setError} />
       )}
     </main>
   </div>;

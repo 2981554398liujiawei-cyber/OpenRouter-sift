@@ -1,4 +1,4 @@
-import type { AccessKey, AccessKeySecret, CatalogCache, DesiredModel, Endpoint, FilterPreview, ModelSummary, ProviderFilterConfig, ProviderFilterCondition, ProviderPolicy, RequestListItem, RequestRecord, Settings } from "./types";
+import type { AccessKey, AccessKeySecret, CatalogCache, DesiredModel, Endpoint, FilterPreview, ModelSummary, ProviderFilterConfig, ProviderFilterCondition, ProviderPolicy, RequestListItem, RequestRecord, Settings, UpstreamKeyStatus } from "./types";
 import type { AccessKeyRoutingData, KeyModelRouting } from "./AccessKeyRouting";
 
 type ApiError = { error?: { message?: string } };
@@ -27,6 +27,8 @@ export const api = {
   deletePolicy: (id: string) => request<unknown>(`/policies/${encodeURIComponent(id)}`, { method: "DELETE" }),
   preview: (modelId: string, candidatePolicy: ProviderPolicy) => request<{ effectivePolicy: Record<string, unknown>; openRouterProviderPayload: Record<string, unknown> }>("/policies/preview", { method: "POST", body: JSON.stringify({ modelId, candidatePolicy }) }),
   settings: () => request<Settings>("/settings"),
+  setOpenRouterKey: (apiKey: string, remember: boolean, verify = true) => request<{ openRouterApiKey: UpstreamKeyStatus } & Partial<Settings>>("/settings/openrouter-key", { method: "PUT", body: JSON.stringify({ apiKey, remember, verify }) }),
+  forgetOpenRouterKey: () => request<{ openRouterApiKey: UpstreamKeyStatus }>("/settings/openrouter-key", { method: "DELETE" }),
   saveSettings: (settings: Pick<Settings, "mergeMode" | "globalPolicy" | "metadataTtlMs" | "requestLogLimit" | "desiredEndpointRefreshIntervalMs">) => request<Settings>("/settings", { method: "PUT", body: JSON.stringify(settings) }),
   requests: (filters: { limit?: number; model?: string; provider?: string; status?: string; protocol?: string } = {}) => {
     const params = new URLSearchParams();

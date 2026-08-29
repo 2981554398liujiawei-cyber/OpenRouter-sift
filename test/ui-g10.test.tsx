@@ -29,7 +29,7 @@ const baseFixtures: Handler = (url, method) => {
   if (url.includes("/desired-models")) return { items: [] };
   if (url.endsWith("/access-keys") && method === "GET") return { items: [] };
   if (url.includes("/requests")) return { items: [], total: 0 };
-  if (url.endsWith("/settings")) return { openRouterApiKeyConfigured: true, openRouterApiKeyMasked: "sk-••••abcd", mergeMode: "merge", globalPolicy: {}, metadataTtlMs: 300000, requestLogLimit: 1000, desiredEndpointRefreshIntervalMs: 60000 };
+  if (url.endsWith("/settings")) return { openRouterApiKey: { configured: true, masked: "••••abcd", source: "environment", secureStoreAvailable: true, secureStoreLabel: "Test store" }, mergeMode: "merge", globalPolicy: {}, metadataTtlMs: 300000, requestLogLimit: 1000, desiredEndpointRefreshIntervalMs: 60000 };
   if (url.endsWith("/policies")) return { items: [] };
   if (url.endsWith("/endpoints")) return { items: [endpointItem] };
   if (url.startsWith("/api/models/")) return { model: { id: "deepseek/demo", name: "DeepSeek Demo", contextLength: 128000, pricing: {} }, policy: { mode: "inherit" } };
@@ -138,12 +138,12 @@ describe("G10 navigation and information architecture", () => {
 
   it("sends human-entered seconds as milliseconds and merge mode in the settings payload", async () => {
     const calls = install((url) => {
-      if (url.endsWith("/settings")) return { openRouterApiKeyConfigured: true, openRouterApiKeyMasked: "sk-••••abcd", mergeMode: "merge", globalPolicy: {}, metadataTtlMs: 300000, requestLogLimit: 1000, desiredEndpointRefreshIntervalMs: 60000 };
+      if (url.endsWith("/settings")) return { openRouterApiKey: { configured: true, masked: "••••abcd", source: "environment", secureStoreAvailable: true, secureStoreLabel: "Test store" }, mergeMode: "merge", globalPolicy: {}, metadataTtlMs: 300000, requestLogLimit: 1000, desiredEndpointRefreshIntervalMs: 60000 };
       return baseFixtures(url, "GET");
     });
     render(<App />);
     fireEvent.click(navButton("Settings"));
-    expect(await screen.findByText(/sk-••••abcd/)).toBeTruthy();
+    expect((await screen.findByLabelText("Configured OpenRouter API key") as HTMLInputElement).value).toBe("••••abcd");
     expect(screen.getByDisplayValue("300")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Models catalog TTL"), { target: { value: "120" } });
     fireEvent.change(screen.getByLabelText("Request history limit"), { target: { value: "2000" } });

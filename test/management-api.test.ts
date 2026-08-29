@@ -90,7 +90,8 @@ describe("management API", () => {
     expect(duplicate.status).toBe(400);
     const settings = await (await nativeFetch(`${base}/api/settings`)).json() as any;
     expect(JSON.stringify(settings)).not.toContain("very-secret");
-    expect(settings.openRouterApiKeyMasked).toBe("••••cret");
+    expect(settings.openRouterApiKey.masked).toBe("••••cret");
+    expect(settings.openRouterApiKey.configured).toBe(true);
     const updateKey = await nativeFetch(`${base}/api/settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ openRouterApiKey: "another-secret" }) });
     expect(updateKey.status).toBe(422);
     const preflight = await nativeFetch(`${base}/api/models`, { method: "OPTIONS" });

@@ -19,7 +19,7 @@ describe("Requests UI", () => {
         id: "req_demo", startedAt: "2026-08-27T10:00:00Z", completedAt: "2026-08-27T10:00:01Z", protocol: "responses", model: "openai/gpt-demo", requestedModel: "openai/gpt-demo", forwardedModel: "openai/gpt-demo", provider: "Relace", actualProviderName: "Relace", status: 200, durationMs: 840, promptTokens: 8200, completionTokens: 1400, totalTokens: 9600, costUsd: 0.00421, enrichmentStatus: "success", streamed: true, clientCancelled: false, generationId: "gen_demo", effectiveProviderPolicy: { only: ["relace"], allow_fallbacks: false }, openRouterLatencyMs: 120, generationTimeMs: 700, finishReason: "stop", isByok: false, router: null, serviceTier: null, error: null,
       };
       else if (url.includes("/requests")) body = { items: [{ id: "req_demo", startedAt: "2026-08-27T10:00:00Z", protocol: "responses", model: "openai/gpt-demo", provider: null, status: 200, durationMs: 4812, promptTokens: 8200, completionTokens: 1400, costUsd: 0.00421, enrichmentStatus: "pending" }], total: 1 };
-      else if (url.endsWith("/settings")) body = { openRouterApiKeyConfigured: false, openRouterApiKeyMasked: null, mergeMode: "merge", globalPolicy: {}, metadataTtlMs: 300000, requestLogLimit: 1000 };
+      else if (url.endsWith("/settings")) body = { openRouterApiKey: { configured: false, masked: null, source: "none", secureStoreAvailable: true, secureStoreLabel: "Test store" }, mergeMode: "merge", globalPolicy: {}, metadataTtlMs: 300000, requestLogLimit: 1000 };
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     vi.spyOn(window, "confirm").mockReturnValue(true);
