@@ -8,7 +8,7 @@
     "openrouter-provider-shim": "dist/server/cli.js"
   },
   "engines": {
-    "node": ">=18.17.0"
+    "node": ">=20.0.0"
   },
   "scripts": {
     "build": "npm run build:ui && npm run build:server",

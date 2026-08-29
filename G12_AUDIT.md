@@ -112,7 +112,8 @@ None found in the inspected implementation.
 - `npm audit --omit=dev`: **PASS** against `https://registry.npmjs.org` (0 vulnerabilities); the configured mirror remains incompatible with npm audit.
 - `npm ci`: **PASS**.
 - Tarball clean-install smoke: **PASS** (`/healthz 200`, `/version` 0.1.0, `/ui/ 200`; installed UI asset present).
-- Real catalog/models/inference smoke, remote CI green status, Windows release smoke, and 1440/1024/768 visual sanity: **not yet evidenced**.
+- Real catalog/models/inference smoke, Windows release smoke, and 1440/1024/768 visual sanity: **not yet evidenced**.
+- CI run `33250965870` exposed Node 18 timing failures in existing long-running restart/cleanup tests; Node 20/22 Ubuntu and Node 20 Windows passed. The supported engine is therefore now truthfully `>=20.0.0`, and Node 18 is no longer claimed.
 
 ## Release recommendation
 

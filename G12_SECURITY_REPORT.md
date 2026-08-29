@@ -63,6 +63,7 @@ Stores use temp-file-plus-rename with restrictive modes where supported. UI serv
 - Tarball install smoke: PASS; installed `/healthz`, `/version`, `/ui/`
 - Current-tree secret scan: only synthetic test fixtures matched; no real credential found
 - Remote GitHub CI green status, real OpenRouter catalog/models/inference smoke, Windows release smoke, and final 1440/1024/768 visual sanity: NOT EVIDENCED
+- CI run `33250965870`: Ubuntu Node 20/22 and Windows Node 20 passed; Ubuntu Node 18 failed on existing long-running restart/cleanup test timeouts. Support is now declared as Node `>=20.0.0` and the Node 18 matrix entry is removed.
 
 ## Release recommendation
 
