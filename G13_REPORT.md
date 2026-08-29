@@ -167,7 +167,7 @@ Real installed RC UI: Requests showed a real short inference record with HTTP 20
 Tests: PASS — 131 passed, 1 skipped.
 Lint: PASS.
 Build: PASS.
-Diff-check: PASS.  
+Diff-check: PASS.
 Secret scan: PASS — no real secret found; synthetic fixtures are limited to tests.
 Runtime artifact scan: PASS — no tracked runtime stores, logs, screenshots, source maps, or tarballs.
 Release smoke: PASS — installed RC `/healthz`, `/version`, `/ui`, catalog refresh, `/v1/models`, one real short inference, and Requests record.
