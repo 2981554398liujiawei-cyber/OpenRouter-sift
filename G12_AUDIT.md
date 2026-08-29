@@ -16,7 +16,7 @@ None found in the inspected implementation.
 | ID | Surface | Evidence | Status |
 |---|---|---|---|
 | AUD-01 | Dependency audit | The configured mirror returned HTTP 404 / `NOT_IMPLEMENTED`; rerun against `https://registry.npmjs.org` completed successfully with 0 vulnerabilities. | Resolved for this audit; CI should use a working registry. |
-| AUD-02 | Release evidence | `.github/workflows/ci.yml` and package metadata are uncommitted in this checkout. | Open until committed and CI is green. |
+| AUD-02 | Release evidence | `.github/workflows/ci.yml` and package metadata are now committed locally, but this checkout has no reachable `origin/main` and no remote CI result is available. | Open until CI is observed green on the published commit. |
 | AUD-03 | Documentation | README still labels client setup “carried over, not re-verified”; `CHANGELOG.md` is absent; `docs/api.md` says `1.0.0` while package version is `0.1.0`. | Open until documentation is truthful and release notes are added. |
 
 ### P2
@@ -116,4 +116,4 @@ None found in the inspected implementation.
 
 ## Release recommendation
 
-**V1.0 BLOCKED.** No open P0 was found and the runtime audit gates pass locally, but CI/package/docs changes are not committed and green, remote CI status is not evidenced, and real-client/manual visual gates remain incomplete. Do not label this tree `V1.0 READY` until those gates pass and a final `G12_SECURITY_REPORT.md` records the result.
+**V1.0 BLOCKED.** No open P0 was found and the runtime audit gates pass locally, but remote CI status is not evidenced and real-client/manual visual gates remain incomplete. Do not label this tree `V1.0 READY` until those gates pass.

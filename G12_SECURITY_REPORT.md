@@ -23,7 +23,7 @@ None found in the inspected tree.
 
 ### P1
 
-- `AUD-02`: CI and package metadata were uncommitted at audit time. Release-integrity blocker; resolve by committing and validating the workflow.
+- `AUD-02`: CI and package metadata were uncommitted at the initial audit snapshot. They are now committed locally; remote CI remains unverified because this checkout has no reachable `origin/main`.
 - `AUD-03`: README/client verification language, API version example, and release notes were stale. Fixed in this tree by updating README/docs and adding `CHANGELOG.md`; final commit/review remains required.
 
 ### P2
@@ -66,4 +66,4 @@ Stores use temp-file-plus-rename with restrictive modes where supported. UI serv
 
 ## Release recommendation
 
-**V1.0 BLOCKED.** The local security and packaging gates are green and no P0 was found. Release labeling is blocked until CI/package/docs changes are committed, remote CI is green, and the remaining real-client/manual release evidence is recorded. No unresolved P1 security vulnerability may be accepted into V1.0.
+**V1.0 BLOCKED.** The local security and packaging gates are green and no P0 was found. Release labeling is blocked until the committed workflow is observed green remotely and the remaining real-client/manual release evidence is recorded. No unresolved P1 security vulnerability may be accepted into V1.0.
