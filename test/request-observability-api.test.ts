@@ -49,6 +49,37 @@ describe("request observability API", () => {
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
+  it("keeps polling OpenRouter's eventually-consistent generation index after 404s before succeeding", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sift-enrich-poll-"));
+    let generationCalls = 0;
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).includes("/generation?")) {
+        generationCalls += 1;
+        if (generationCalls <= 2) return new Response("not indexed yet", { status: 404 });
+        return new Response(JSON.stringify({ data: { provider_name: "Late Provider", tokens_prompt: 5, tokens_completion: 2, total_cost: 0.001, latency: 40, generation_time: 30, finish_reason: "stop", is_byok: false } }), { status: 200 });
+      }
+      return new Response("ok", { status: 200, headers: { "content-type": "application/json", "x-generation-id": "gen-polling" } });
+    }) as typeof fetch;
+    const cfg = loadConfig({});
+    cfg.port = 0; cfg.log_level = "silent"; cfg.upstream_api_key = "test-upstream-key";
+    cfg.request_log_store_path = join(dir, "requests.json"); cfg.model_policy_store_path = join(dir, "policies.json"); cfg.metadata_cache_path = join(dir, "metadata.json"); cfg.settings_store_path = join(dir, "settings.json");
+    const server = startServer(cfg); servers.push(server); await once(server, "listening");
+    const base = `http://127.0.0.1:${(server.address() as any).port}`;
+    const response = await nativeFetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: "Bearer inbound", "content-type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-demo", messages: [{ role: "user", content: "hi" }] }) });
+    expect(response.status).toBe(200);
+    for (let i = 0; i < 40 && generationCalls < 3; i++) await pause(250);
+    expect(generationCalls).toBeGreaterThanOrEqual(3);
+    for (let i = 0; i < 20; i++) {
+      await pause(250);
+      const detail = await (await nativeFetch(`${base}/api/requests?status=200`)).json() as any;
+      if (detail.items[0]?.enrichmentStatus === "success") {
+        expect(detail.items[0]).toMatchObject({ enrichmentStatus: "success", provider: "Late Provider" });
+        return;
+      }
+    }
+    throw new Error("enrichment did not succeed after 404 polling");
+  });
+
   it("keeps inference successful when generation enrichment fails and records local policy rejection", async () => {
     const directory = mkdtempSync(join(tmpdir(), "openrouter-observability-failure-"));
     try {

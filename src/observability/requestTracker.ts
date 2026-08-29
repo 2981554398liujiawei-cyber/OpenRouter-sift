@@ -34,6 +34,7 @@ function safeError(error: unknown): { code: string | null; message: string } {
 }
 
 const retryableStatuses = new Set([404, 429, 502, 503, 504]);
+const GENERATION_404_POLL_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 45_000, 60_000];
 
 export class RequestTracker {
   private readonly queue = new BoundedQueue(100, 2);
@@ -79,6 +80,13 @@ export class RequestTracker {
         try { raw = await this.generationClient!.getGeneration(generationId); break; }
         catch (error) {
           const status = error instanceof OpenRouterMetadataError ? error.status : undefined;
+          // OpenRouter's generation index is eventually consistent: a just-finished
+          // generation can answer 404 for a while, so poll 404s much longer than
+          // transient upstream errors before recording enrichment as failed.
+          if (status === 404 && attempt < GENERATION_404_POLL_DELAYS_MS.length) {
+            await new Promise((resolve) => setTimeout(resolve, GENERATION_404_POLL_DELAYS_MS[attempt]));
+            continue;
+          }
           if (attempt >= 2 || !status || !retryableStatuses.has(status)) throw error;
           await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
         }
