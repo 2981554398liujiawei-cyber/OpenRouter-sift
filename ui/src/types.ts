@@ -148,6 +148,11 @@ export interface RequestListItem {
   durationMs: number | null;
   promptTokens: number | null;
   completionTokens: number | null;
+  cachedPromptTokens: number | null;
+  cacheWriteTokens: number | null;
+  cacheDiscountUsd: number | null;
+  cacheStatus: string | null;
+  sessionAffinity: "explicit" | "implicit" | "unknown";
   costUsd: number | null;
   enrichmentStatus: EnrichmentStatus | null;
 }
@@ -160,6 +165,13 @@ export interface RequestRecord extends RequestListItem {
   clientCancelled: boolean | null;
   proxyDurationMs: number | null;
   generationId: string | null;
+  cachedPromptTokens: number | null;
+  cacheWriteTokens: number | null;
+  cacheDiscountUsd: number | null;
+  cacheStatus: string | null;
+  cacheAge: string | null;
+  sessionAffinity: "explicit" | "implicit" | "unknown";
+  sessionIdPresent: boolean;
   effectiveProviderPolicy: Record<string, unknown> | null;
   actualProviderName: string | null;
   totalTokens: number | null;

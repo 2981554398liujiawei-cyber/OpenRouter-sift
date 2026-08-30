@@ -131,7 +131,7 @@ function AppContent() {
         <SettingsPage onOpenModel={openModel} onKeySaved={() => void loadModels()} setNotice={setNotice} setError={setError} />
       )}
     </main>
-    {!unlocked && <div className="modal-backdrop"><section className="modal panel unlock-modal" role="dialog" aria-label={t("control.unlock")} aria-modal="true">
+    {!unlocked && <div className="sift-modal-backdrop"><section className="modal panel unlock-modal" role="dialog" aria-label={t("control.unlock")} aria-modal="true">
       <div className="panel-title"><div><h2>{t("control.unlock")}</h2><p>{t("control.description")}</p></div></div>
       <label className="modal-field">{t("control.key")}<input type="password" autoFocus value={unlockKey} onChange={(event) => setUnlockKey(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") unlock(); }} placeholder={t("control.key")} /></label>
       <div className="actions"><button className="button" disabled={!unlockKey.trim()} onClick={unlock}>{t("control.unlockAction")}</button></div>

@@ -88,6 +88,8 @@ p { color: var(--text-muted); line-height: 1.55; margin-bottom: 0; font-size: 13
 .eyebrow { color: var(--accent); font-weight: 700; text-transform: uppercase; font-size: 10.5px; letter-spacing: .1em; margin-bottom: 8px; }
 code, small { color: var(--text-faint); font-size: 12px; }
 .mono, code { font-family: var(--mono); }
+.key-cell { display: flex; align-items: center; gap: 8px; min-width: max-content; }
+.key-cell .text-button { white-space: nowrap; font-size: 12px; }
 .muted { color: var(--text-muted); font-size: 13px; }
 
 /* Buttons */
@@ -261,7 +263,7 @@ textarea { min-height: 130px; resize: vertical; font: 12px/1.5 var(--mono); }
 .trace-final { border-color: var(--accent-border); background: var(--accent-soft); }
 
 /* Modals */
-.modal-backdrop { position: fixed; inset: 0; z-index: 5; display: grid; place-items: center; padding: 20px; background: #17171666; }
+.sift-modal-backdrop { position: fixed; inset: 0; z-index: 5; display: grid; place-items: center; padding: 20px; background: #17171666; }
 .modal { width: min(560px, 100%); margin: 0; }
 .modal-field { display: grid; gap: 7px; font-size: 13px; font-weight: 600; }
 .model-checks { border: 0; padding: 0; margin: 20px 0 0; display: grid; gap: 9px; max-height: 220px; overflow: auto; }

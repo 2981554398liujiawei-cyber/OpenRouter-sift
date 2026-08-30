@@ -3,6 +3,7 @@ import { api } from "./api";
 import { Badge, Breadcrumbs } from "./components";
 import { useI18n } from "./i18n";
 import { display } from "./format";
+import { canonicalNumber, numericDraftIsPlausible } from "./numericDraft";
 import type {
   Endpoint,
   FilterOperator,
@@ -115,9 +116,41 @@ function conditionIsComplete(condition: ProviderFilterCondition, fields: Field[]
     return Array.isArray(condition.value) && condition.value.length > 0;
   }
   const field = [...fields, ...baseFields].find((item) => item.id === condition.field);
-  if (field?.type === "number") return condition.value !== "" && Number.isFinite(Number(condition.value));
+  if (field?.type === "number") return canonicalNumber(String(condition.value ?? "")) !== null;
   if (field?.type === "boolean") return typeof condition.value === "boolean";
   return String(condition.value ?? "").trim().length > 0;
+}
+function canonicalizeFilter(filter: ProviderFilterConfig, fields: Field[]): ProviderFilterConfig | null {
+  const conditions: ProviderFilterCondition[] = [];
+  for (const condition of filter.conditions) {
+    if (!condition.enabled) continue;
+    if (!conditionIsComplete(condition, fields)) return null;
+    const field = [...fields, ...baseFields].find((item) => item.id === condition.field);
+    const value = field?.type === "number"
+      ? canonicalNumber(String(condition.value ?? ""))
+      : condition.value;
+    if (field?.type === "number" && value === null) return null;
+    conditions.push({ ...condition, value });
+  }
+  const telemetryAgeSeconds = canonicalNumber(String(filter.maxTelemetryAgeMs / 1000));
+  if (telemetryAgeSeconds === null || telemetryAgeSeconds < 30) return null;
+  return { ...filter, conditions, maxTelemetryAgeMs: telemetryAgeSeconds * 1000 };
+}
+function localizedFieldLabel(field: Field, t: Translate): string {
+  const parts = field.id.split(".");
+  if (field.id.startsWith("performance.throughput.")) return t("provider.fieldThroughput", { percentile: parts.at(-1)?.toUpperCase() ?? "" });
+  if (field.id.startsWith("performance.latency.")) return t("provider.fieldLatency", { percentile: parts.at(-1)?.toUpperCase() ?? "" });
+  if (field.id.startsWith("uptime.")) return t("provider.fieldUptime", { window: parts.at(-1) ?? "" });
+  const labels: Record<string, Parameters<Translate>[0]> = {
+    quantization: "provider.fieldQuantization",
+    "context.length": "provider.fieldContextLength",
+    "context.maxPrompt": "provider.fieldMaxPrompt",
+    "context.maxCompletion": "provider.fieldMaxCompletion",
+    supportedParameters: "provider.fieldSupportedParameter",
+    supportsImplicitCaching: "provider.fieldImplicitCaching",
+    "provider.routingId": "provider.fieldRoutingId",
+  };
+  return labels[field.id] ? t(labels[field.id]) : field.label;
 }
 function fieldsFor(endpoints: Endpoint[]): Field[] {
   const keys = new Set<string>();
@@ -199,6 +232,7 @@ export function DesiredModelDetail({
   const [busy, setBusy] = useState(true);
   const [endpointError, setEndpointError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [telemetryDraft, setTelemetryDraft] = useState("1800");
   const initialized = useRef(false);
   const requestGeneration = useRef(0);
   const fields = useMemo(() => fieldsFor(endpoints), [endpoints]);
@@ -216,6 +250,7 @@ export function DesiredModelDetail({
       setEndpoints(result.items);
       setSavedFilter(nextSaved ? clone(nextSaved) : null);
       setFilter(nextSaved ? clone(nextSaved) : emptyFilter());
+      setTelemetryDraft(String(Math.round((nextSaved?.maxTelemetryAgeMs ?? 1_800_000) / 1000)));
       const initialPreview =
         rawSaved && typeof rawSaved === "object" && "preview" in rawSaved
           ? (rawSaved as { preview?: FilterPreview | null }).preview
@@ -246,10 +281,11 @@ export function DesiredModelDetail({
     }
     const timer = window.setTimeout(() => {
       setPreviewing(true);
-      const candidate = {
-        ...filter,
-        conditions: filter.conditions.filter((condition) => condition.enabled),
-      };
+      const candidate = canonicalizeFilter(filter, fields);
+      if (!candidate) {
+        setPreviewing(false);
+        return;
+      }
       void api
         .previewDesiredFilter(modelId, candidate)
         .then((next) => {
@@ -264,6 +300,10 @@ export function DesiredModelDetail({
     }, 250);
     return () => window.clearTimeout(timer);
   }, [modelId, filter, setError]);
+  const canonicalFilter = canonicalizeFilter(filter, fields);
+  const hasInvalidDraft = filter.conditions.some((condition) => condition.enabled && !conditionIsComplete(condition, fields))
+    || canonicalNumber(telemetryDraft) === null
+    || Number(telemetryDraft) < 30;
   const update = (index: number, patch: Partial<ProviderFilterCondition>) =>
     setFilter((current) => ({
       ...current,
@@ -273,11 +313,13 @@ export function DesiredModelDetail({
       ),
     }));
   const save = async () => {
+    if (!canonicalFilter) return;
     try {
-      const result = await api.saveDesiredFilter(modelId, filter);
-      const next = unwrap(result) ?? clone(filter);
+      const result = await api.saveDesiredFilter(modelId, canonicalFilter);
+      const next = unwrap(result) ?? clone(canonicalFilter);
       setSavedFilter(clone(next));
       setFilter(clone(next));
+      setTelemetryDraft(String(Math.round((next.maxTelemetryAgeMs ?? 1_800_000) / 1000)));
       if (
         result &&
         typeof result === "object" &&
@@ -292,6 +334,7 @@ export function DesiredModelDetail({
   };
   const reset = () => {
     setFilter(savedFilter ? clone(savedFilter) : emptyFilter());
+    setTelemetryDraft(String(Math.round((savedFilter?.maxTelemetryAgeMs ?? 1_800_000) / 1000)));
     setNotice(t("provider.reset") + ".");
   };
   const remove = async () => {
@@ -300,6 +343,7 @@ export function DesiredModelDetail({
       await api.deleteDesiredFilter(modelId);
       setSavedFilter(null);
       setFilter(emptyFilter());
+      setTelemetryDraft("1800");
       setPreview(previewFromEndpoints(modelId, endpoints));
       setNotice(t("provider.delete") + ".");
     } catch (err) {
@@ -432,34 +476,30 @@ export function DesiredModelDetail({
             >
               {t("provider.addCondition")}
             </button>
+            {hasInvalidDraft && <p className="validation-message" role="status">{t("provider.completeValue")}</p>}
             <details className="advanced-block provider-more-filters" open={filter.conditions.length > 0}>
               <summary>{t("provider.moreFilters")}</summary>
               <label className="telemetry-age">
                 {t("provider.telemetryAge")}
                 <input
                   aria-label="Maximum telemetry age"
-                  type="number"
                   min="30"
-                  value={
-                    Number.isFinite(filter.maxTelemetryAgeMs)
-                      ? Math.round(filter.maxTelemetryAgeMs / 1000)
-                      : ""
-                  }
-                  onChange={(event) =>
-                    setFilter({
-                      ...filter,
-                      maxTelemetryAgeMs: Math.max(
-                        30_000,
-                        Number(event.target.value) * 1000,
-                      ),
-                    })
-                  }
+                  type="text"
+                  inputMode="decimal"
+                  value={telemetryDraft}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setTelemetryDraft(next);
+                    if (numericDraftIsPlausible(next) && canonicalNumber(next) !== null && Number(next) >= 30) {
+                      setFilter({ ...filter, maxTelemetryAgeMs: Number(next) * 1000 });
+                    }
+                  }}
                 />
                 <small>{t("provider.telemetryHint")}</small>
               </label>
             </details>
             <div className="actions">
-              <button className="button" onClick={() => void save()}>
+              <button className="button" disabled={!canonicalFilter || hasInvalidDraft} onClick={() => void save()}>
                 {t("provider.saveFilters")}
               </button>
               {dirty && (
@@ -507,6 +547,7 @@ function ConditionRow({
   update: (index: number, patch: Partial<ProviderFilterCondition>) => void;
   remove: () => void;
 }) {
+  const { t } = useI18n();
   const field = [...fields, ...baseFields].find(
     (item) => item.id === condition.field,
   ) ?? {
@@ -523,7 +564,7 @@ function ConditionRow({
   return (
     <div className="filter-condition">
       <select
-        aria-label="Filter field"
+        aria-label={t("provider.filterField")}
         value={condition.field}
         onChange={(event) => {
           const next = [...fields, ...baseFields].find(
@@ -541,24 +582,24 @@ function ConditionRow({
         }}
       >
         {fields.length > 0 && (
-          <optgroup label="Pricing">
+          <optgroup label={t("provider.pricing")}>
             {fields.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.label}
+                {localizedFieldLabel(item, t)}
               </option>
             ))}
           </optgroup>
         )}
-        <optgroup label="Performance, reliability & capabilities">
+        <optgroup label={t("provider.performanceCapabilities")}>
           {baseFields.map((item) => (
             <option key={item.id} value={item.id}>
-              {item.label}
+                {localizedFieldLabel(item, t)}
             </option>
           ))}
         </optgroup>
       </select>
       <select
-        aria-label="Filter operator"
+        aria-label={t("provider.filterOperator")}
         value={condition.operator}
         onChange={(event) =>
           update(index, {
@@ -590,21 +631,22 @@ function ConditionRow({
       </select>
       {field.type === "boolean" ? (
         <select
-          aria-label="Filter value"
+          aria-label={t("provider.filterValue")}
           value={String(condition.value)}
           onChange={(event) =>
             update(index, { value: event.target.value === "true" })
           }
         >
-          <option value="true">Required</option>
-          <option value="false">Not required</option>
+          <option value="true">{t("provider.required")}</option>
+          <option value="false">{t("provider.notRequired")}</option>
         </select>
       ) : condition.operator === "exists" ? (
-        <span className="muted">present</span>
+        <span className="muted">{t("provider.present")}</span>
       ) : (
         <input
           aria-label="Filter value"
-          type={field.type === "number" ? "number" : "text"}
+          type="text"
+          inputMode={field.type === "number" ? "decimal" : undefined}
           value={value}
           onChange={(event) =>
             update(index, {
@@ -613,17 +655,13 @@ function ConditionRow({
                     .split(",")
                     .map((item) => item.trim())
                     .filter(Boolean)
-                : field.type === "number"
-                  ? event.target.value === ""
-                    ? ""
-                    : Number(event.target.value)
-                  : event.target.value,
+                : event.target.value,
             })
           }
         />
       )}
       {field.unit && <span className="filter-unit">{field.unit}</span>}
-      <label className="condition-toggle" title="Enable this condition">
+      <label className="condition-toggle" title={t("provider.enableCondition")}>
         <input
           type="checkbox"
           checked={condition.enabled}
@@ -632,7 +670,7 @@ function ConditionRow({
       </label>
       <button
         className="condition-delete"
-        aria-label={`Delete condition ${index + 1}`}
+        aria-label={t("provider.deleteCondition", { index: index + 1 })}
         onClick={remove}
       >
         ✕
@@ -838,6 +876,7 @@ function ProviderPreview({
               </small>
             )}
           </span>
+          <p className="routing-hint">{t("provider.stickyGuidance")}</p>
         </div>
         {preview?.failureReason && (
           <Badge variant="danger">{preview.failureReason}</Badge>
