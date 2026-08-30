@@ -64,7 +64,12 @@ export class JsonAccessKeyStore {
     const cleanedModels = cleanModels(allowedModels);
     const record: AccessKey = { id: randomUUID(), name: cleanName(name), keyHash: hashAccessKey(secret), keyPrefix: accessKeyPrefix(secret), keyLast4: accessKeyLast4(secret), enabled: true, allowedModels: cleanedModels, modelOverrides: validateModelOverrides(modelOverrides, cleanedModels), createdAt: now, updatedAt: now, lastUsedAt: null };
     this.keys[record.id] = record;
-    this.persist();
+    try {
+      this.persist();
+    } catch (error) {
+      delete this.keys[record.id];
+      throw error;
+    }
     return { record: structuredClone(record), secret };
   }
 
@@ -76,10 +81,28 @@ export class JsonAccessKeyStore {
       ? Object.fromEntries(Object.entries(existing.modelOverrides ?? {}).filter(([source]) => allowedModels.includes(source)))
       : validateModelOverrides(patch.modelOverrides, allowedModels);
     const record = { ...existing, allowedModels, modelOverrides, ...(patch.name === undefined ? {} : { name: cleanName(patch.name) }), ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }), updatedAt: new Date().toISOString() };
-    this.keys[id] = record; this.persist(); return structuredClone(record);
+    this.keys[id] = record;
+    try {
+      this.persist();
+    } catch (error) {
+      this.keys[id] = existing;
+      throw error;
+    }
+    return structuredClone(record);
   }
 
-  delete(id: string): boolean { const existed = id in this.keys; delete this.keys[id]; if (existed) this.persist(); return existed; }
+  delete(id: string): boolean {
+    const existing = this.keys[id];
+    if (!existing) return false;
+    delete this.keys[id];
+    try {
+      this.persist();
+    } catch (error) {
+      this.keys[id] = existing;
+      throw error;
+    }
+    return true;
+  }
 
   findBySecret(secret: string): AccessKey | undefined {
     if (!isLocalAccessKeySecret(secret)) return undefined;

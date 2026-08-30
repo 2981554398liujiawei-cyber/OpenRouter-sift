@@ -65,6 +65,8 @@ export async function pipeFetchResponse(upstreamResp: Response, res: ServerRespo
   // Forward other useful headers
   const xRequestId = upstreamResp.headers.get("x-request-id");
   if (xRequestId) headers["x-request-id"] = xRequestId;
+  const xSessionId = upstreamResp.headers.get("x-session-id");
+  if (xSessionId && xSessionId.length < 256) headers["x-session-id"] = xSessionId;
   
   // Forward Retry-After header for rate limiting (429 errors)
   const retryAfter = upstreamResp.headers.get("retry-after");

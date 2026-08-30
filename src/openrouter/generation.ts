@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseCacheMetadata } from "../observability/cacheMetadata.js";
 
 const numberOrNull = z.unknown().transform((value) => typeof value === "number" && Number.isFinite(value) ? value : null);
 const stringOrNull = z.unknown().transform((value) => typeof value === "string" ? value : null);
@@ -34,6 +35,9 @@ export interface GenerationMetadata {
   serviceTier: string | null;
   cancelled: boolean | null;
   streamed: boolean | null;
+  cachedPromptTokens: number | null;
+  cacheWriteTokens: number | null;
+  cacheDiscountUsd: number | null;
 }
 
 /** Generation responses are additive: only copy fields safe for local metadata history. */
@@ -42,6 +46,7 @@ export function parseGenerationResponse(raw: unknown): GenerationMetadata {
   const parsed = generationSchema.safeParse(container);
   if (!parsed.success) throw new Error("OpenRouter generation response has an invalid object");
   const data = parsed.data;
+  const cache = parseCacheMetadata(container);
   // The documented generation response exposes provider_name, but no stable provider routing slug.
-  return { providerName: data.provider_name, providerRoutingId: null, promptTokens: data.tokens_prompt, completionTokens: data.tokens_completion, totalTokens: data.total_tokens, totalCost: data.total_cost, latency: data.latency, generationTime: data.generation_time, finishReason: data.finish_reason, isByok: data.is_byok, router: data.router, serviceTier: data.service_tier, cancelled: data.cancelled, streamed: data.streamed };
+  return { providerName: data.provider_name, providerRoutingId: null, promptTokens: data.tokens_prompt, completionTokens: data.tokens_completion, totalTokens: data.total_tokens, totalCost: data.total_cost, latency: data.latency, generationTime: data.generation_time, finishReason: data.finish_reason, isByok: data.is_byok, router: data.router, serviceTier: data.service_tier, cancelled: data.cancelled, streamed: data.streamed, cachedPromptTokens: cache.cachedPromptTokens, cacheWriteTokens: cache.cacheWriteTokens, cacheDiscountUsd: cache.cacheDiscountUsd };
 }

@@ -1,4 +1,4 @@
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -92,5 +92,16 @@ describe("G6 access stores", () => {
     expect(accessKeyModelOverrideSchema.safeParse({ providerMode: "inherit" }).success).toBe(true);
     expect(accessKeyModelOverrideSchema.safeParse({ providerMode: "inherit", allowFallbacks: true }).success).toBe(false);
     expect(accessKeyModelOverrideSchema.safeParse({ providerMode: "inherit", providers: ["provider-id"] }).success).toBe(false);
+  });
+
+  it("rolls back an in-memory key when persistence fails", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
+    try {
+      const blocker = join(dir, "not-a-directory");
+      writeFileSync(blocker, "blocker");
+      const store = new JsonAccessKeyStore(join(blocker, "keys.json"));
+      expect(() => store.create("Rollback", ["demo/model"])).toThrow();
+      expect(store.list()).toEqual([]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

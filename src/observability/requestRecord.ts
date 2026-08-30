@@ -22,6 +22,11 @@ export interface RequestRecord {
   generationId: string | null;
   cacheStatus: string | null;
   cacheAge: string | null;
+  cachedPromptTokens: number | null;
+  cacheWriteTokens: number | null;
+  cacheDiscountUsd: number | null;
+  sessionAffinity: "explicit" | "implicit" | "unknown";
+  sessionIdPresent: boolean;
   effectiveProviderPolicy: ProviderPolicy | null;
   providerFilterSnapshot: ProviderFilterConfig | null;
   eligibleProviderRoutingIds: string[] | null;
@@ -65,6 +70,11 @@ export function newRequestRecord(id: string, protocol: RequestProtocol): Request
     generationId: null,
     cacheStatus: null,
     cacheAge: null,
+    cachedPromptTokens: null,
+    cacheWriteTokens: null,
+    cacheDiscountUsd: null,
+    sessionAffinity: "unknown",
+    sessionIdPresent: false,
     effectiveProviderPolicy: null,
     providerFilterSnapshot: null,
     eligibleProviderRoutingIds: null,
@@ -101,6 +111,11 @@ export function requestListItem(record: RequestRecord) {
     durationMs: record.proxyDurationMs,
     promptTokens: record.promptTokens,
     completionTokens: record.completionTokens,
+    cachedPromptTokens: record.cachedPromptTokens,
+    cacheWriteTokens: record.cacheWriteTokens,
+    cacheDiscountUsd: record.cacheDiscountUsd,
+    cacheStatus: record.cacheStatus,
+    sessionAffinity: record.sessionAffinity,
     costUsd: record.costUsd,
     enrichmentStatus: record.enrichmentStatus,
   };

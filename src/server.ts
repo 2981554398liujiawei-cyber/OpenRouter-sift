@@ -20,7 +20,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JsonRequestLogStore } from "./observability/requestStore.js";
 import { RequestTracker } from "./observability/requestTracker.js";
-import type { RequestProtocol } from "./observability/requestRecord.js";
+import { parseCacheMetadata } from "./observability/cacheMetadata.js";
+import { requestListItem, type RequestProtocol } from "./observability/requestRecord.js";
 import { JsonDesiredModelStore } from "./access/desiredModelStore.js";
 import { JsonAccessKeyStore, type AccessKey } from "./access/accessKeyStore.js";
 import { validateModelOverrides, type ModelOverrides } from "./access/schema.js";
@@ -123,6 +124,15 @@ function accessKeyForApi(key: AccessKey): Omit<AccessKey, "keyHash"> {
 
 function isManagedKeyCandidate(req: IncomingMessage): boolean {
   return inboundBearerToken(req)?.startsWith("sift_sk_") === true;
+}
+
+function validSessionId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length < 256;
+}
+
+function inboundSessionId(req: IncomingMessage): string | null {
+  const value = req.headers["x-session-id"];
+  return validSessionId(value) ? value : null;
 }
 
 export function safeResponseBodyForLogging(body: string, redact: boolean): string {
@@ -650,7 +660,7 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
             const protocolFilter = url.searchParams.get("protocol") ?? undefined;
             if (protocolFilter && protocolFilter !== "anthropic_messages" && protocolFilter !== "chat_completions" && protocolFilter !== "responses") return writeError(res, 400, "Invalid protocol", "INVALID_REQUEST_QUERY");
             const result = requestLogs.list({ limit, model: url.searchParams.get("model") ?? undefined, provider: url.searchParams.get("provider") ?? undefined, status, protocol: protocolFilter });
-            return writeJson(res, 200, { items: result.items.map((record) => ({ id: record.id, startedAt: record.startedAt, protocol: record.protocol, accessKeyId: record.accessKeyId, accessKeyName: record.accessKeyName, model: record.requestedModel ?? record.forwardedModel, provider: record.actualProviderName, status: record.status, durationMs: record.proxyDurationMs, promptTokens: record.promptTokens, completionTokens: record.completionTokens, costUsd: record.costUsd, enrichmentStatus: record.enrichmentStatus })), total: result.total });
+            return writeJson(res, 200, { items: result.items.map((record) => ({ ...requestListItem(record), accessKeyId: record.accessKeyId, accessKeyName: record.accessKeyName })), total: result.total });
           }
           const requestDetailMatch = url.pathname.match(/^\/api\/requests\/([^/]+)$/);
           if (requestDetailMatch && req.method === "GET") {
@@ -829,6 +839,9 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
 
         const requestedModel = typeof body?.model === "string" ? body.model : null;
         requestTracker.update(observationId ?? "", { requestedModel, forwardedModel: requestedModel, streamed: body?.stream === true });
+        const bodySessionId = validSessionId(body?.session_id);
+        const headerSessionId = Boolean(inboundSessionId(req));
+        requestTracker.update(observationId ?? "", { sessionIdPresent: bodySessionId || headerSessionId, sessionAffinity: bodySessionId || headerSessionId ? "explicit" : "unknown" });
 
         // Remap Anthropic model names to user's preferred model
         // Claude Code sends internal model names (claude-haiku, etc.) for helper functions
@@ -956,6 +969,8 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
         "authorization": upstreamAuth,
         "content-type": "application/json",
       };
+      const sessionId = inboundSessionId(req);
+      if (sessionId) headers["x-session-id"] = sessionId;
 
       // Optional attribution headers for OpenRouter analytics
       if (cfg.add_attribution_headers) {
@@ -1050,6 +1065,21 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
       const generationId = upstreamResp.headers.get("x-generation-id");
       const cacheStatus = upstreamResp.headers.get("x-openrouter-cache-status");
       const cacheAge = upstreamResp.headers.get("x-openrouter-cache-age");
+      if (!body?.stream) {
+        try {
+          const responseBody = await upstreamResp.clone().json() as unknown;
+          const cache = parseCacheMetadata(responseBody);
+          const cachePatch: Parameters<RequestTracker["update"]>[1] = {
+            cachedPromptTokens: cache.cachedPromptTokens,
+            cacheWriteTokens: cache.cacheWriteTokens,
+            cacheDiscountUsd: cache.cacheDiscountUsd,
+          };
+          if (cache.promptTokens !== null) cachePatch.promptTokens = cache.promptTokens;
+          requestTracker.update(observationId ?? "", cachePatch);
+        } catch {
+          // Response bodies are never persisted; usage metadata is best-effort.
+        }
+      }
 
       // Pipe response back to caller without decoding, buffering, or changing any chunks.
       const pipeResult = await pipeFetchResponse(upstreamResp, res, upstreamAbort.signal);
