@@ -61,6 +61,7 @@
   "files": [
     "dist/server",
     "dist/ui",
+    "assets",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

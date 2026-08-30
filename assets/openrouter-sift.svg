@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">OpenRouter Sift</title>
+  <desc id="desc">A dark rounded square with a bright sift mark.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#17141f"/>
+      <stop offset="1" stop-color="#2a2142"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8ff0d1"/>
+      <stop offset="0.52" stop-color="#78b7ff"/>
+      <stop offset="1" stop-color="#c69cff"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <path d="M61 70h134l-49 58v48l-36 18v-66L61 70Z" fill="url(#mark)"/>
+  <path d="M75 70h106l-39 46H114L75 70Z" fill="#fff" opacity=".16"/>
+  <circle cx="198" cy="58" r="13" fill="#8ff0d1"/>
+</svg>

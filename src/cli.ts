@@ -3,6 +3,8 @@ import { Command } from "commander";
 import { loadConfig, type CliOptions } from "./config.js";
 import { startServer } from "./server.js";
 import { getVersion } from "./util/version.js";
+import { createLaunchToken, launcherUrl, openBrowser } from "./launcher.js";
+import { once } from "node:events";
 
 const program = new Command();
 
@@ -54,6 +56,53 @@ program
     } catch (err: any) {
       console.error("Error:", err.message);
       process.exit(1);
+    }
+  });
+
+program
+  .command("launch")
+  .description("Start a private Windows launcher session and open the control UI")
+  .option("--config <path>", "Path to config JSON file")
+  .option("--port <port>", "Preferred local port (8787-8797)", (v) => Number(v), 8787)
+  .option("--log-level <level>", "Log level: silent|error|info|debug", "info")
+  .action(async (opts: CliOptions) => {
+    if (process.platform !== "win32") {
+      console.error("Error: 'launch' is supported on Windows only; use 'serve' on this platform.");
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const cfg = loadConfig(opts);
+      cfg.host = "127.0.0.1";
+      const preferred = Number.isInteger(opts.port) ? Number(opts.port) : 8787;
+      const token = createLaunchToken();
+      let server: ReturnType<typeof startServer> | undefined;
+      let selectedPort = preferred;
+      for (let port = preferred; port <= preferred + 10; port += 1) {
+        cfg.port = port;
+        try {
+          server = startServer(cfg, { launcher: { token, onExit: () => server?.close(() => process.exit(0)) } });
+          await Promise.race([
+            once(server, "listening"),
+            once(server, "error").then(([error]) => { throw error; }),
+          ]);
+          selectedPort = port;
+          break;
+        } catch (error: any) {
+          if (server) { try { server.close(); } catch { /* not listening */ } server = undefined; }
+          if (error?.code !== "EADDRINUSE") throw error;
+        }
+      }
+      if (!server) throw new Error(`No free local port found in ${preferred}-${preferred + 10}`);
+      const url = launcherUrl(cfg.host, selectedPort, token);
+      openBrowser(url);
+      console.log(`OpenRouter Sift v${cfg._runtime.version} launched at http://${cfg.host}:${selectedPort}`);
+      const shutdown = () => server?.close(() => process.exit(0));
+      process.once("SIGINT", shutdown);
+      process.once("SIGTERM", shutdown);
+    } catch (err: any) {
+      console.error("Error:", err.message);
+      process.exitCode = 1;
     }
   });
 

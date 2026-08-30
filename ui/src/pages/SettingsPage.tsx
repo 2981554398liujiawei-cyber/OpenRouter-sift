@@ -13,6 +13,7 @@ export function SettingsPage({ onOpenModel, onKeySaved, setNotice, setError }: {
   const [refreshSeconds, setRefreshSeconds] = useState("300");
   const [requestLimitDraft, setRequestLimitDraft] = useState("1000");
   const [policies, setPolicies] = useState<Array<ProviderPolicy & { modelId: string }>>([]);
+  const [shortcut, setShortcut] = useState<{ available: boolean; installed: boolean } | null>(null);
   useEffect(() => {
     void api.settings().then((value) => {
       setSettings(value);
@@ -22,6 +23,7 @@ export function SettingsPage({ onOpenModel, onKeySaved, setNotice, setError }: {
       setGlobalPolicyText(JSON.stringify(value.globalPolicy, null, 2));
     }).catch((err: Error) => setError(err.message));
     void api.policies().then((result) => setPolicies(result.items)).catch(() => setPolicies([]));
+    void api.launcherShortcut().then(setShortcut).catch(() => setShortcut(null));
   }, []);
   const save = async () => {
     if (!settings) return;
@@ -44,6 +46,7 @@ export function SettingsPage({ onOpenModel, onKeySaved, setNotice, setError }: {
   if (!settings) return <section className="page"><p className="muted">{t("common.loadingSettings")}</p></section>;
   return <section className="page"><PageHeader eyebrow={t("settings.eyebrow")} title={t("settings.title")} description={t("settings.description")} actions={<button className="button" onClick={() => void save()}>{t("settings.saveChanges")}</button>} />
     <OpenRouterKeyPanel status={settings.openRouterApiKey} onKeySaved={() => { void api.settings().then((value) => setSettings(value)).catch(() => undefined); onKeySaved?.(); }} setNotice={setNotice} setError={setError} />
+    {shortcut?.available && <section className="panel"><h2>{t("settings.desktopLauncher")}</h2><p>{t("settings.desktopLauncherDescription")}</p><div className="actions">{shortcut.installed ? <button className="button secondary" onClick={() => void api.removeLauncherShortcut().then(setShortcut).then(() => setNotice(t("settings.shortcutRemoved"))).catch((err: Error) => setError(err.message))}>{t("settings.removeShortcut")}</button> : <button className="button" onClick={() => void api.createLauncherShortcut().then(setShortcut).then(() => setNotice(t("settings.shortcutCreated"))).catch((err: Error) => setError(err.message))}>{t("settings.createShortcut")}</button>}</div></section>}
     <section className="panel"><h2>{t("settings.metadata")}</h2><p>{t("settings.metadataDescription")}</p><div className="form-grid">
       <label>{t("settings.catalogTtl")}<input aria-label={t("settings.catalogTtl")} type="text" inputMode="decimal" value={catalogTtlSeconds} onChange={(event) => setCatalogTtlSeconds(event.target.value)} /><small>{humanDuration(canonicalNumber(catalogTtlSeconds) ?? 0, t)}</small></label>
       <label>{t("settings.providerRefresh")}<input aria-label={t("settings.providerRefresh")} type="text" inputMode="decimal" value={refreshSeconds} onChange={(event) => setRefreshSeconds(event.target.value)} /><small>{humanDuration(canonicalNumber(refreshSeconds) ?? 0, t)}</small></label>
