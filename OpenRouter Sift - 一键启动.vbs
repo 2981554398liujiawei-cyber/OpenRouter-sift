@@ -8,7 +8,7 @@ root = fso.GetParentFolderName(WScript.ScriptFullName)
 cli = fso.BuildPath(root, "dist\server\cli.js")
 
 If Not fso.FileExists(cli) Then
-  MsgBox "找不到启动文件：" & vbCrLf & cli & vbCrLf & vbCrLf & "请先在项目目录执行 npm run build。", vbExclamation, "OpenRouter Sift"
+  MsgBox "Launch file not found:" & vbCrLf & cli & vbCrLf & vbCrLf & "Run npm run build in the project folder first.", vbExclamation, "OpenRouter Sift"
   WScript.Quit 1
 End If
 
@@ -24,7 +24,7 @@ For Each pathEntry In Split(pathValue, ";")
 Next
 
 If Len(node) = 0 Then
-  MsgBox "找不到 node.exe，请先安装 Node.js 20 或更高版本。", vbExclamation, "OpenRouter Sift"
+  MsgBox "node.exe was not found. Install Node.js 20 or newer first.", vbExclamation, "OpenRouter Sift"
   WScript.Quit 1
 End If
 
