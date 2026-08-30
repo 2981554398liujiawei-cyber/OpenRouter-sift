@@ -1,5 +1,13 @@
 # Changelog
 
+## G14 — reliability and release closure
+
+- Numeric Provider Filter and Settings editors now preserve intermediate values such as `0.` and `0.01` until preview/save parsing.
+- Local Access Key creation has explicit validation, single-flight submission, inline failure feedback, and persistence rollback safety.
+- Native OpenRouter `session_id` / `x-session-id` passthrough is covered for Chat Completions, Responses, Messages, and streaming responses without storing session values.
+- Requests expose cache status, age, cached input tokens, cache writes, discount, and cache ratio when safe metadata is available; prompt and response content remains non-persistent.
+- Added the G14 engineering audit and release evidence for CI, package contents, tarball installation, and compatibility boundaries.
+
 ## 1.0.0-rc.1 — release candidate
 
 ### G13 closure

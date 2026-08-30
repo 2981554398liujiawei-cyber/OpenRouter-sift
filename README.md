@@ -56,7 +56,7 @@ Then:
 
 1. Open [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui).
 2. Go to **Settings → OpenRouter**, paste your OpenRouter API key, and click **Save Key**. Sift verifies the key against OpenRouter before storing it; "Remember on this device" keeps it in the OS credential store, unchecking it keeps it for the current session only.
-3. Add a model to **Desired Models**, create an **API Key** for it, and point your client at `http://127.0.0.1:8787/v1` with the `sift_sk_…` key.
+3. Add a model to **Desired Models**, create a **Local Access Key** for it, and point your client at `http://127.0.0.1:8787/v1` with the `sift_sk_…` key. The key is shown once; copy it before closing the dialog.
 
 The model catalog uses OpenRouter's public API, so browsing works before a key is configured; inference requires the key.
 
@@ -72,6 +72,8 @@ curl http://127.0.0.1:8787/v1/chat/completions -H "Authorization: Bearer sift_sk
 
 Servers, CI, and automation can skip the UI and set `OPENROUTER_API_KEY` in the environment at startup. The Settings UI still works alongside it: a key saved from the UI takes priority until forgotten, after which Sift falls back to the environment variable.
 
+For normal use, prefer the Settings UI and OS credential store. The command-line `--upstream-key` option remains an advanced compatibility path because command arguments can appear in shell history or process listings.
+
 ## Security
 
 - **Local by default.** The server binds `127.0.0.1`; do not expose it to a network without understanding the consequences.
@@ -83,7 +85,11 @@ Servers, CI, and automation can skip the UI and set `OPENROUTER_API_KEY` in the 
 
 ## Privacy
 
-Request records are metadata-only. Sift never persists prompts, responses, reasoning, or tool arguments, and upstream error bodies are stored only as sanitized summaries. The OpenRouter upstream key and Local Access Key plaintext never appear in logs, the request store, or the metadata cache.
+Request records are metadata-only. Sift never persists prompts, responses, reasoning, tool arguments, or client `session_id` values, and upstream error bodies are stored only as sanitized summaries. When OpenRouter provides cache metadata, Sift records only numeric/status fields such as cached input tokens, cache writes, discount, status, and age. The OpenRouter upstream key and Local Access Key plaintext never appear in logs, the request store, or the metadata cache.
+
+### Sticky routing
+
+Sift preserves OpenRouter's native affinity inputs without maintaining a local session database. If a client supplies `session_id` in the request body or `x-session-id`, Sift forwards that value to OpenRouter and records only `sessionAffinity: explicit` in local request metadata. Sift never invents a session ID. Provider order and hard Provider Filters still apply first; sticky routing cannot widen the final eligible Provider Set.
 
 ## Client Notes (verified in the G11 harness)
 
