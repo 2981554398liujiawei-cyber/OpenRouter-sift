@@ -56,9 +56,13 @@ Then:
 
 1. Open [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui).
 2. Go to **Settings → OpenRouter**, paste your OpenRouter API key, and click **Save Key**. Sift verifies the key against OpenRouter before storing it; "Remember on this device" keeps it in the OS credential store, unchecking it keeps it for the current session only.
-3. Add a model to **Desired Models**, create a **Local Access Key** for it, and point your client at `http://127.0.0.1:8787/v1` with the `sift_sk_…` key. The key is shown once; copy it before closing the dialog.
+3. Add a model to **Desired Models**, create a **Local Access Key** for it, and point your client at `http://127.0.0.1:8787/v1` with the `sift_sk_…` key. On Windows/macOS/Linux secure-store backends, the key can later be copied again from the API Keys page; the JSON store contains only its hash and display metadata. If the OS credential store is unavailable, the key is one-time only and the UI says so explicitly.
 
 The model catalog uses OpenRouter's public API, so browsing works before a key is configured; inference requires the key.
+
+### Windows one-click launcher
+
+On Windows, `openrouter-sift launch` starts a loopback-only session, opens the control UI in the default browser, and exits after the launcher tab closes. The session uses a short-lived random browser lease; the URL fragment is removed immediately and the lease token is kept only in that tab's `sessionStorage`. The ordinary `serve` command remains a long-running server for headless and client-managed use. The Settings page can create or remove the fixed **OpenRouter Sift** desktop shortcut; it does not accept arbitrary commands or paths.
 
 Minimal smoke test once a key exists (use your own key; it is shown only once at creation):
 
@@ -78,7 +82,7 @@ For normal use, prefer the Settings UI and OS credential store. The command-line
 
 - **Local by default.** The server binds `127.0.0.1`; do not expose it to a network without understanding the consequences.
 - **The backend owns the upstream secret.** The browser may submit an OpenRouter key to the localhost backend, but the backend never returns the plaintext — responses carry a `••••abcd`-style mask and the source ("secure-store", "ui-session", "environment"). "Remember" writes to the OS credential store (Windows Credential Manager / macOS Keychain / Secret Service); session-only keys live in server memory and disappear on restart. Nothing is ever written as plaintext to the JSON stores.
-- **Local key plaintext is one-time.** `sift_sk_…` is displayed once at creation; disk stores a SHA-256 digest, key prefix, and last four characters.
+- **Local key plaintext is recoverable only through the authenticated control API.** New `sift_sk_…` secrets are stored in the OS credential store under a per-key account and are returned only by the control-authenticated copy endpoint after hash verification. Disk stores a SHA-256 digest, key prefix, last four characters, and storage status. Legacy and secure-store-unavailable keys remain one-time only.
 - **Managed keys are inference-only.** A `sift_sk_…` key is rejected on `/api/*` with `MANAGED_KEY_CONTROL_PLANE_FORBIDDEN`; static UI assets remain public and contain no secrets.
 - **Environment keys remain supported.** `OPENROUTER_API_KEY` is the headless fallback: UI-configured keys override it at runtime, and forgetting them restores it.
 - **Control-plane authentication is opt-in.** Without `SHIM_LOCAL_API_KEY`, `/api/*` is available to local processes under the localhost trust model. When it is set, static `/ui` assets still load normally; the UI prompts for **Control Key** after its first protected API request and keeps that key in memory only. A `sift_sk_…` Local Access Key is never a Control Key.

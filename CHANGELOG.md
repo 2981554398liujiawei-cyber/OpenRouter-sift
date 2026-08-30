@@ -1,5 +1,13 @@
 # Changelog
 
+## G15 — secure key vault and Windows launcher
+
+- Local Access Keys created by the new build are recoverable after restart through the OS credential store; normal JSON stores still contain only hashes and display metadata.
+- Added an authenticated, no-store copy-secret endpoint with hash verification, legacy-key detection, one-time fallback when secure storage is unavailable, and cleanup on deletion.
+- Added `openrouter-sift launch` for a loopback-only Windows session with a browser-tab lease, hidden startup, bounded port selection, and fixed desktop shortcut create/remove controls.
+- Added the OpenRouter Sift SVG/PNG/ICO icon set and included release assets in the package allowlist.
+- Added G15 vault/lease regression tests and updated the UI and security documentation.
+
 ## G14 — reliability and release closure
 
 - Numeric Provider Filter and Settings editors now preserve intermediate values such as `0.` and `0.01` until preview/save parsing.
