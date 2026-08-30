@@ -21,8 +21,10 @@ describe("managed access key UI", () => {
       else if (url.endsWith("/desired-models")) body = { items: [{ modelId: "deepseek/deepseek-v4-flash", enabled: true, assignedApiCount: 0 }] };
       else if (url.endsWith("/access-keys") && method === "GET") body = { items: createdRecord ? [createdRecord] : [] };
       else if (url.endsWith("/access-keys") && method === "POST") {
-        createdRecord = { id: "key_1", name: "Codex", keyPrefix: "sift_sk_", keyLast4: "1234", enabled: true, allowedModels: ["deepseek/deepseek-v4-flash"], lastUsedAt: null };
+        createdRecord = { id: "key_1", name: "Codex", keyPrefix: "sift_sk_", keyLast4: "1234", enabled: true, allowedModels: ["deepseek/deepseek-v4-flash"], lastUsedAt: null, secretStorage: "secure-store" };
         body = { ...createdRecord, secret: "sift_sk_once_only_1234" };
+      } else if (url.endsWith("/secret") && method === "POST") {
+        body = { secret: "sift_sk_once_only_1234" };
       }
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
@@ -73,7 +75,7 @@ describe("managed access key UI", () => {
     fireEvent.click(createButton);
     await waitFor(() => expect(postCount).toBe(1));
     expect(screen.getByText("Creating…")).toBeTruthy();
-    resolvePost?.(new Response(JSON.stringify({ id: "key_1", name: "Codex", secret: "sift_sk_once_only_1234", keyPrefix: "sift_sk_", keyLast4: "1234", enabled: true, allowedModels: ["demo/model"], lastUsedAt: null }), { status: 200 }));
+        resolvePost?.(new Response(JSON.stringify({ id: "key_1", name: "Codex", secret: "sift_sk_once_only_1234", keyPrefix: "sift_sk_", keyLast4: "1234", enabled: true, allowedModels: ["demo/model"], lastUsedAt: null, secretStorage: "unavailable" }), { status: 200 }));
     expect(await screen.findByText("sift_sk_once_only_1234")).toBeTruthy();
   });
 });

@@ -44,6 +44,9 @@ export const api = {
   settings: () => request<Settings>("/settings"),
   setOpenRouterKey: (apiKey: string, remember: boolean, verify = true) => request<{ openRouterApiKey: UpstreamKeyStatus } & Partial<Settings>>("/settings/openrouter-key", { method: "PUT", body: JSON.stringify({ apiKey, remember, verify }) }),
   forgetOpenRouterKey: () => request<{ openRouterApiKey: UpstreamKeyStatus }>("/settings/openrouter-key", { method: "DELETE" }),
+  launcherShortcut: () => request<{ available: boolean; installed: boolean; path?: string }>("/launcher/shortcut"),
+  createLauncherShortcut: () => request<{ available: boolean; installed: boolean; path?: string }>("/launcher/shortcut", { method: "POST" }),
+  removeLauncherShortcut: () => request<{ available: boolean; installed: boolean; path?: string }>("/launcher/shortcut", { method: "DELETE" }),
   saveSettings: (settings: Pick<Settings, "mergeMode" | "globalPolicy" | "metadataTtlMs" | "requestLogLimit" | "desiredEndpointRefreshIntervalMs">) => request<Settings>("/settings", { method: "PUT", body: JSON.stringify(settings) }),
   requests: (filters: { limit?: number; model?: string; provider?: string; status?: string; protocol?: string } = {}) => {
     const params = new URLSearchParams();
@@ -62,6 +65,7 @@ export const api = {
   accessKeys: () => request<{ items: AccessKey[] } | AccessKey[]>("/access-keys"),
   accessKey: (id: string) => request<AccessKey>(`/access-keys/${encodeURIComponent(id)}`),
   createAccessKey: (body: { name: string; allowedModels: string[] }) => request<AccessKeySecret>("/access-keys", { method: "POST", body: JSON.stringify(body) }),
+  copyAccessKeySecret: (id: string) => request<{ secret: string }>(`/access-keys/${encodeURIComponent(id)}/secret`, { method: "POST" }),
   updateAccessKey: (id: string, body: { name?: string; allowedModels?: string[]; enabled?: boolean }) => request<AccessKey>(`/access-keys/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteAccessKey: (id: string) => request<unknown>(`/access-keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
   accessKeyRouting: (id: string, modelId: string) => request<AccessKeyRoutingData>(`/access-keys/${encodeURIComponent(id)}/models/${encodeURIComponent(modelId)}/override`),

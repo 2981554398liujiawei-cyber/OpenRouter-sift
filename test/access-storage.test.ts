@@ -6,6 +6,20 @@ import { accessKeyLast4, accessKeyPrefix, hashAccessKey, verifyAccessKey } from 
 import { JsonDesiredModelStore } from "../src/access/desiredModelStore";
 import { JsonAccessKeyStore } from "../src/access/accessKeyStore";
 import { accessKeyModelOverrideSchema } from "../src/access/schema";
+import type { SecureKeyStore } from "../src/auth/secureStore";
+
+class MemorySecureStore implements SecureKeyStore {
+  readonly label = "memory";
+  constructor(private readonly values: Map<string, string>, private readonly id: string) {}
+  available(): boolean { return true; }
+  load(): string | null { return this.values.get(this.id) ?? null; }
+  save(key: string): void { this.values.set(this.id, key); }
+  clear(): void { this.values.delete(this.id); }
+}
+
+function memoryFactory(values = new Map<string, string>()) {
+  return { values, factory: (id: string) => new MemorySecureStore(values, id) };
+}
 
 describe("G6 access stores", () => {
   it("persists desired models and removes them cleanly", () => {
@@ -26,14 +40,15 @@ describe("G6 access stores", () => {
     const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
     try {
       const path = join(dir, "keys.json");
-      const store = new JsonAccessKeyStore(path);
+      const vault = memoryFactory();
+      const store = new JsonAccessKeyStore(path, vault.factory);
       const created = store.create("Codex", ["deepseek/deepseek-v4-flash"]);
       expect(created.secret).toMatch(/^sift_sk_[A-Za-z0-9_-]{40,}$/);
       expect(store.get(created.record.id)).not.toHaveProperty("secret");
       const disk = readFileSync(path, "utf8");
       expect(disk).not.toContain(created.secret);
       expect(store.findBySecret(created.secret)?.id).toBe(created.record.id);
-      const reloaded = new JsonAccessKeyStore(path); reloaded.load();
+      const reloaded = new JsonAccessKeyStore(path, vault.factory); reloaded.load();
       expect(reloaded.findBySecret(created.secret)?.name).toBe("Codex");
       expect(reloaded.list()[0]).not.toHaveProperty("secret");
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -48,7 +63,7 @@ describe("G6 access stores", () => {
 
     const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
     try {
-      const store = new JsonAccessKeyStore(join(dir, "keys.json"));
+      const store = new JsonAccessKeyStore(join(dir, "keys.json"), memoryFactory().factory);
       const first = store.create("A", ["a", "b"]);
       const second = store.create("B", ["b"]);
       store.update(first.record.id, { enabled: false, allowedModels: ["a", "b", "a"] });
@@ -64,7 +79,7 @@ describe("G6 access stores", () => {
   it("rejects malformed names and model identifiers", () => {
     const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
     try {
-      const store = new JsonAccessKeyStore(join(dir, "keys.json"));
+      const store = new JsonAccessKeyStore(join(dir, "keys.json"), memoryFactory().factory);
       expect(() => store.create("", [])).toThrow("Invalid access key name");
       expect(() => store.create("ok", [" "])).toThrow("Invalid allowed model");
       const models = new JsonDesiredModelStore(join(dir, "desired.json"));
@@ -75,13 +90,13 @@ describe("G6 access stores", () => {
   it("persists model overrides and prunes them when grants change", () => {
     const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
     try {
-      const store = new JsonAccessKeyStore(join(dir, "keys.json"));
+      const store = new JsonAccessKeyStore(join(dir, "keys.json"), memoryFactory().factory);
       const override = { providerMode: "allowlist" as const, providers: ["provider-id"] };
       const created = store.create("Codex", ["provider/model", "other/model"], { "provider/model": override });
       expect(store.get(created.record.id)?.modelOverrides).toEqual({ "provider/model": override });
       store.update(created.record.id, { allowedModels: ["other/model"] });
       expect(store.get(created.record.id)?.modelOverrides).toEqual({});
-      const reloaded = new JsonAccessKeyStore(join(dir, "keys.json"));
+      const reloaded = new JsonAccessKeyStore(join(dir, "keys.json"), memoryFactory().factory);
       reloaded.load();
       expect(reloaded.get(created.record.id)?.modelOverrides).toEqual({});
       expect(() => reloaded.update(created.record.id, { modelOverrides: { "provider/model": override } })).toThrow();
@@ -99,9 +114,27 @@ describe("G6 access stores", () => {
     try {
       const blocker = join(dir, "not-a-directory");
       writeFileSync(blocker, "blocker");
-      const store = new JsonAccessKeyStore(join(blocker, "keys.json"));
+      const store = new JsonAccessKeyStore(join(blocker, "keys.json"), memoryFactory().factory);
       expect(() => store.create("Rollback", ["demo/model"])).toThrow();
       expect(store.list()).toEqual([]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("retains recoverable secrets in the OS-store adapter, never JSON", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sift-access-"));
+    try {
+      const vault = memoryFactory();
+      const path = join(dir, "keys.json");
+      const store = new JsonAccessKeyStore(path, vault.factory);
+      const created = store.create("Recoverable", ["demo/model"]);
+      expect(created.record.secretStorage).toBe("secure-store");
+      expect(store.getSecret(created.record.id)).toEqual({ secret: created.secret });
+      expect(readFileSync(path, "utf8")).not.toContain(created.secret);
+      const reloaded = new JsonAccessKeyStore(path, vault.factory); reloaded.load();
+      expect(reloaded.getSecret(created.record.id)).toEqual({ secret: created.secret });
+      expect(reloaded.delete(created.record.id)).toBe(true);
+      expect(vault.values.has(`local-access-key:${created.record.id}`)).toBe(false);
+      expect(reloaded.getSecret(created.record.id)).toEqual({ reason: "missing" });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

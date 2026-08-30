@@ -3,6 +3,9 @@ import { atomicWriteJson } from "../util/atomicWrite.js";
 import { randomUUID } from "node:crypto";
 import { accessKeyLast4, accessKeyPrefix, createAccessKeySecret, hashAccessKey, isLocalAccessKeySecret, verifyAccessKey } from "./crypto.js";
 import { modelOverridesSchema, validateModelOverrides, type ModelOverrides } from "./schema.js";
+import { createPlatformSecureStore, SecureKeyStoreUnavailableError, type SecureKeyStore } from "../auth/secureStore.js";
+
+export type AccessKeySecretStorage = "secure-store" | "unavailable" | "legacy";
 
 export interface AccessKey {
   id: string;
@@ -17,6 +20,8 @@ export interface AccessKey {
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;
+  /** Whether the recoverable secret is in the OS store, one-time only, or predates G15. */
+  secretStorage: AccessKeySecretStorage;
 }
 
 interface AccessKeyFile { version: 1; keys: Record<string, AccessKey>; }
@@ -37,7 +42,10 @@ function cleanModels(models: string[]): string[] {
 export class JsonAccessKeyStore {
   private keys: Record<string, AccessKey> = {};
   private usagePersistTimer: ReturnType<typeof setTimeout> | undefined;
-  constructor(private readonly path: string) {}
+  constructor(
+    private readonly path: string,
+    private readonly secureStoreFactory: (id: string) => SecureKeyStore = (id) => createPlatformSecureStore(`local-access-key:${id}`),
+  ) {}
 
   load(): void {
     if (!existsSync(this.path)) return;
@@ -51,7 +59,8 @@ export class JsonAccessKeyStore {
     this.keys = Object.fromEntries(Object.entries(parsed.keys).map(([id, key]) => {
       const allowedModels = cleanModels(key.allowedModels);
       const overrides = validateModelOverrides(key.modelOverrides ?? {});
-      return [id, { ...key, allowedModels, modelOverrides: Object.fromEntries(Object.entries(overrides).filter(([source]) => allowedModels.includes(source))) }];
+      const secretStorage: AccessKeySecretStorage = key.secretStorage === "secure-store" || key.secretStorage === "unavailable" ? key.secretStorage : "legacy";
+      return [id, { ...key, allowedModels, modelOverrides: Object.fromEntries(Object.entries(overrides).filter(([source]) => allowedModels.includes(source))), secretStorage }];
     }));
   }
 
@@ -62,12 +71,24 @@ export class JsonAccessKeyStore {
     const secret = createAccessKeySecret();
     const now = new Date().toISOString();
     const cleanedModels = cleanModels(allowedModels);
-    const record: AccessKey = { id: randomUUID(), name: cleanName(name), keyHash: hashAccessKey(secret), keyPrefix: accessKeyPrefix(secret), keyLast4: accessKeyLast4(secret), enabled: true, allowedModels: cleanedModels, modelOverrides: validateModelOverrides(modelOverrides, cleanedModels), createdAt: now, updatedAt: now, lastUsedAt: null };
+    const record: AccessKey = { id: randomUUID(), name: cleanName(name), keyHash: hashAccessKey(secret), keyPrefix: accessKeyPrefix(secret), keyLast4: accessKeyLast4(secret), enabled: true, allowedModels: cleanedModels, modelOverrides: validateModelOverrides(modelOverrides, cleanedModels), createdAt: now, updatedAt: now, lastUsedAt: null, secretStorage: "unavailable" };
+    let secureStore: SecureKeyStore | undefined;
+    try {
+      secureStore = this.secureStoreFactory(record.id);
+      if (secureStore.available()) {
+        secureStore.save(secret);
+        record.secretStorage = "secure-store";
+      }
+    } catch (error) {
+      if (!(error instanceof SecureKeyStoreUnavailableError)) throw error;
+      record.secretStorage = "unavailable";
+    }
     this.keys[record.id] = record;
     try {
       this.persist();
     } catch (error) {
       delete this.keys[record.id];
+      if (record.secretStorage === "secure-store") secureStore?.clear();
       throw error;
     }
     return { record: structuredClone(record), secret };
@@ -101,7 +122,20 @@ export class JsonAccessKeyStore {
       this.keys[id] = existing;
       throw error;
     }
+    if (existing.secretStorage === "secure-store") {
+      try { this.secureStoreFactory(id).clear(); } catch { /* revocation already succeeded in JSON */ }
+    }
     return true;
+  }
+
+  /** Load a recoverable secret only from the OS credential store. */
+  getSecret(id: string): { secret: string } | { reason: "unavailable" | "legacy" | "missing" | "mismatch" } {
+    const record = this.keys[id];
+    if (!record) return { reason: "missing" };
+    if (record.secretStorage !== "secure-store") return { reason: record.secretStorage };
+    const secret = this.secureStoreFactory(id).load();
+    if (!secret) return { reason: "unavailable" };
+    return verifyAccessKey(secret, record.keyHash) ? { secret } : { reason: "mismatch" };
   }
 
   findBySecret(secret: string): AccessKey | undefined {

@@ -27,6 +27,11 @@ export class SecureKeyStoreUnavailableError extends Error {
 const SERVICE = "OpenRouterSift";
 const ACCOUNT = "upstream-openrouter-key";
 
+function safeAccount(account: string): string {
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(account)) throw new Error("Invalid secure credential account");
+  return account;
+}
+
 function run(command: string, args: string[], options: { input?: string } = {}): string {
   return execFileSync(command, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, encoding: "utf8", ...options }) as string;
 }
@@ -34,6 +39,8 @@ function run(command: string, args: string[], options: { input?: string } = {}):
 /** Windows Credential Manager via CredWrite/CredRead P/Invoke (generic credential). */
 class WindowsCredentialStore implements SecureKeyStore {
   readonly label = "Windows Credential Manager";
+
+  constructor(private readonly account: string) {}
 
   available(): boolean { return true; }
 
@@ -61,13 +68,13 @@ class WindowsCredentialStore implements SecureKeyStore {
       `  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]`,
       `  public static extern bool CredDelete(string target, int type, int flags); }`,
       `'@`,
-      `$target = '${SERVICE}\\${ACCOUNT}'`,
+      `$target = '${SERVICE}\\${this.account}'`,
       action === "write" && `
       $credential = New-Object CredMan+CREDENTIAL
       $credential.Flags = 0
       $credential.Type = 1
       $credential.TargetName = $target
-      $credential.UserName = '${ACCOUNT}'
+      $credential.UserName = '${this.account}'
       $credential.CredentialBlob = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni(${valueLiteral})
       $credential.CredentialBlobSize = [Text.Encoding]::Unicode.GetByteCount(${valueLiteral})
       $credential.Persist = 2
@@ -121,11 +128,13 @@ class WindowsCredentialStore implements SecureKeyStore {
 class MacKeychainStore implements SecureKeyStore {
   readonly label = "macOS Keychain";
 
+  constructor(private readonly account: string) {}
+
   available(): boolean { return process.platform === "darwin" && existsSync("/usr/bin/security"); }
 
   load(): string | null {
     try {
-      const result = run("/usr/bin/security", ["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"]);
+      const result = run("/usr/bin/security", ["find-generic-password", "-s", SERVICE, "-a", this.account, "-w"]);
       const value = result.trim();
       return value || null;
     } catch {
@@ -135,7 +144,7 @@ class MacKeychainStore implements SecureKeyStore {
 
   save(key: string): void {
     try {
-      run("/usr/bin/security", ["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w", key, "-U"]);
+      run("/usr/bin/security", ["add-generic-password", "-s", SERVICE, "-a", this.account, "-w", key, "-U"]);
     } catch (err: any) {
       throw new SecureKeyStoreUnavailableError(`Keychain write failed: ${err?.message ?? err}`);
     }
@@ -143,7 +152,7 @@ class MacKeychainStore implements SecureKeyStore {
 
   clear(): void {
     try {
-      run("/usr/bin/security", ["delete-generic-password", "-s", SERVICE, "-a", ACCOUNT]);
+      run("/usr/bin/security", ["delete-generic-password", "-s", SERVICE, "-a", this.account]);
     } catch {
       // Absent entry is fine.
     }
@@ -156,6 +165,8 @@ class MacKeychainStore implements SecureKeyStore {
  */
 class LinuxSecretStore implements SecureKeyStore {
   readonly label = "Secret Service keyring";
+
+  constructor(private readonly account: string) {}
 
   available(): boolean { return process.platform === "linux"; }
 
@@ -170,7 +181,7 @@ class LinuxSecretStore implements SecureKeyStore {
     const tool = this.toolPath();
     if (!tool) return null;
     try {
-      const value = run(tool, ["lookup", "service", SERVICE, "account", ACCOUNT]).trim();
+      const value = run(tool, ["lookup", "service", SERVICE, "account", this.account]).trim();
       return value || null;
     } catch {
       return null;
@@ -181,7 +192,7 @@ class LinuxSecretStore implements SecureKeyStore {
     const tool = this.toolPath();
     if (!tool) throw new SecureKeyStoreUnavailableError("secret-tool is not installed; install libsecret-tools to remember keys");
     try {
-      run(tool, ["store", "service", SERVICE, "account", ACCOUNT], { input: key });
+      run(tool, ["store", "service", SERVICE, "account", this.account], { input: key });
     } catch (err: any) {
       throw new SecureKeyStoreUnavailableError(`Secret Service write failed: ${err?.message ?? err}`);
     }
@@ -191,7 +202,7 @@ class LinuxSecretStore implements SecureKeyStore {
     const tool = this.toolPath();
     if (!tool) return;
     try {
-      run(tool, ["clear", "service", SERVICE, "account", ACCOUNT]);
+      run(tool, ["clear", "service", SERVICE, "account", this.account]);
     } catch {
       // Absent entry is fine.
     }
@@ -213,10 +224,11 @@ export class NoopSecureStore implements SecureKeyStore {
   clear(): void {}
 }
 
-export function createPlatformSecureStore(): SecureKeyStore {
-  if (process.platform === "win32") return new WindowsCredentialStore();
-  if (process.platform === "darwin") return new MacKeychainStore();
-  if (process.platform === "linux") return new LinuxSecretStore();
+export function createPlatformSecureStore(account = ACCOUNT): SecureKeyStore {
+  const normalizedAccount = safeAccount(account);
+  if (process.platform === "win32") return new WindowsCredentialStore(normalizedAccount);
+  if (process.platform === "darwin") return new MacKeychainStore(normalizedAccount);
+  if (process.platform === "linux") return new LinuxSecretStore(normalizedAccount);
   return new NoopSecureStore();
 }
 

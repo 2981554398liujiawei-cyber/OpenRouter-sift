@@ -33,12 +33,13 @@ export async function readJsonBody(req: IncomingMessage, maxBytes: number): Prom
   }
 }
 
-export function writeJson(res: ServerResponse, status: number, obj: any): void {
+export function writeJson(res: ServerResponse, status: number, obj: any, extraHeaders: Record<string, string> = {}): void {
   const body = JSON.stringify(obj);
   res.writeHead(status, {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(body),
     ...SECURITY_HEADERS,
+    ...extraHeaders,
   });
   res.end(body);
 }

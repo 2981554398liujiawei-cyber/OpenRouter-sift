@@ -1,4 +1,5 @@
 import http, { IncomingMessage, ServerResponse } from "node:http";
+import { existsSync } from "node:fs";
 import { URL } from "node:url";
 import { readJsonBody, writeJson, writeError, pipeFetchResponse, getInboundAuth, SECURITY_HEADERS } from "./util/http.js";
 import { applyResolvedProviderPolicy, resolveProviderPolicy } from "./policy/resolver.js";
@@ -28,6 +29,8 @@ import { validateModelOverrides, type ModelOverrides } from "./access/schema.js"
 import { evaluateProviderEndpoints, isTelemetryFresh, providerFilterUpsertSchema, type ProviderFilterConfig } from "./providerFilters/index.js";
 import { resolveManagedProviderRouting } from "./policy/managedRouting.js";
 import { guardLocalRequest, isLoopbackOrigin, isNonLoopbackBind } from "./util/hostGuard.js";
+import { LauncherLease, type LauncherOptions } from "./launcher.js";
+import { createDesktopShortcut, desktopShortcutPath, removeDesktopShortcut } from "./launcher/windowsShortcut.js";
 
 const OPENROUTER_BASE_V1 = "https://openrouter.ai/api/v1";
 // In the bundled CLI, the UI lives beside `dist/server`, not beside the caller's cwd.
@@ -212,7 +215,7 @@ function controlPlaneError(res: ServerResponse, err: any, fallbackStatus: number
   return writeError(res, fallbackStatus, fallbackMessage, fallbackCode);
 }
 
-export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyStore } = {}): http.Server {
+export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyStore; accessKeySecureStoreFactory?: (id: string) => SecureKeyStore; launcher?: LauncherOptions } = {}): http.Server {
   const log = makeLogger(cfg);
   // A non-loopback bind exposes the whole control plane to the network. Refuse
   // to start without explicit control auth instead of printing an ignorable
@@ -256,7 +259,8 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
   try { requestLogs.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.request_log_store_path }, "request history unavailable; continuing without stored history"); }
   const requestTracker = new RequestTracker(requestLogs, log, upstreamClient);
   const desiredModels = new JsonDesiredModelStore(cfg.desired_model_store_path);
-  const accessKeys = new JsonAccessKeyStore(cfg.access_key_store_path);
+  const accessKeys = new JsonAccessKeyStore(cfg.access_key_store_path, options.accessKeySecureStoreFactory);
+  const launcherLease = options.launcher ? new LauncherLease(options.launcher) : null;
   try { desiredModels.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.desired_model_store_path }, "desired model store unavailable; using an empty desired model set"); }
   try { accessKeys.load(); } catch (err: any) { log.error({ err: err?.message ?? String(err), path: cfg.access_key_store_path }, "access key store unavailable; managed access keys are unavailable"); }
 
@@ -357,6 +361,21 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
         }
         res.end();
         return;
+      }
+
+      // Launcher lease is a narrow, one-time capability used only to know when
+      // the launcher-owned browser tabs have gone away. It never grants API
+      // access and is intentionally handled before control-plane auth.
+      if (launcherLease && url.pathname === "/api/launcher/lease") {
+        if (req.method !== "POST") return writeError(res, 405, "Method not allowed", "ERR_METHOD_NOT_ALLOWED");
+        try {
+          const input = await readJsonBody(req, Math.min(cfg.max_body_bytes, 16 * 1024)) as { token?: unknown; clientId?: unknown; action?: unknown };
+          if (!launcherLease.handle(input.token, input.clientId, input.action)) return writeError(res, 403, "Invalid launcher lease", "ERR_LAUNCH_LEASE");
+          return writeJson(res, 200, { ok: true }, { "cache-control": "no-store" });
+        } catch (err: any) {
+          if (err?.code === "ERR_BODY_TOO_LARGE") return writeError(res, 413, "Launcher lease body too large", "ERR_BODY_TOO_LARGE");
+          return writeError(res, 400, "Invalid launcher lease", "ERR_LAUNCH_LEASE");
+        }
       }
 
       // A Local Access Key is an inference credential, never a control-plane
@@ -481,6 +500,7 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
             return writeJson(res, 200, { modelId, deleted: desiredModels.remove(modelId), removedFromKeys });
           }
           const accessKeyMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)$/);
+          const accessKeySecretMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)\/secret$/);
           const accessKeyOverridesMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)\/model-overrides$/);
           const accessKeyOverridesPreviewMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)\/model-overrides\/preview$/);
           const accessKeyOverrideModelMatch = url.pathname.match(/^\/api\/access-keys\/([^/]+)\/models\/([^/]+)\/override$/);
@@ -491,6 +511,19 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
             return unique.every((model) => desiredModels.has(model)) ? unique : null;
           };
           if (url.pathname === "/api/access-keys" && req.method === "GET") return writeJson(res, 200, { items: accessKeys.list().map(accessKeyForApi) });
+          if (url.pathname === "/api/launcher/shortcut" && req.method === "GET") {
+            if (process.platform !== "win32") return writeJson(res, 200, { available: false, installed: false });
+            const path = desktopShortcutPath();
+            return writeJson(res, 200, { available: true, installed: existsSync(path) });
+          }
+          if (url.pathname === "/api/launcher/shortcut" && req.method === "POST") {
+            try { return writeJson(res, 201, { available: true, installed: true, ...createDesktopShortcut() }); }
+            catch { return writeError(res, 503, "Could not create the Windows desktop shortcut", "SHORTCUT_UNAVAILABLE"); }
+          }
+          if (url.pathname === "/api/launcher/shortcut" && req.method === "DELETE") {
+            try { return writeJson(res, 200, { available: true, ...removeDesktopShortcut() }); }
+            catch { return writeError(res, 503, "Could not remove the Windows desktop shortcut", "SHORTCUT_UNAVAILABLE"); }
+          }
           if (url.pathname === "/api/access-keys" && req.method === "POST") {
             try {
                const input = await readJsonBody(req, cfg.max_body_bytes) as { name?: unknown; allowedModels?: unknown; modelOverrides?: unknown };
@@ -505,6 +538,13 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
                const created = accessKeys.create(input.name, allowedModels, modelOverrides);
               return writeJson(res, 201, { ...accessKeyForApi(created.record), secret: created.secret });
             } catch (err: any) { return controlPlaneError(res, err, 400, "INVALID_ACCESS_KEY", "Invalid access key"); }
+          }
+          if (accessKeySecretMatch && req.method === "POST") {
+            const result = accessKeys.getSecret(accessKeySecretMatch[1]!);
+            if ("secret" in result) return writeJson(res, 200, result, { "cache-control": "no-store", pragma: "no-cache" });
+            if (result.reason === "missing") return writeError(res, 404, "Access key not found", "ACCESS_KEY_NOT_FOUND");
+            if (result.reason === "mismatch") return writeError(res, 500, "Stored Local Access Key secret did not verify", "ACCESS_KEY_SECRET_MISMATCH");
+            return writeError(res, 409, result.reason === "legacy" ? "This Local Access Key was created before recoverable secrets were supported" : "This Local Access Key secret is available only once", "ACCESS_KEY_SECRET_UNAVAILABLE");
           }
           if (accessKeyOverridesMatch && req.method === "GET") {
             const key = accessKeys.get(accessKeyOverridesMatch[1]);
@@ -752,7 +792,7 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
               return writeJson(res, 200, { openRouterApiKey: credentials.getStatus(), mergeMode: cfg.merge_mode, globalPolicy: cfg.policy, metadataTtlMs: metadataCatalog.getTtlMs(), requestLogLimit: requestLogs.getLimit(), desiredEndpointRefreshIntervalMs: controlSettings.desiredEndpointRefreshIntervalMs });
             } catch (err: any) { return controlPlaneError(res, err, 400, "INVALID_SETTINGS", "Invalid settings"); }
           }
-          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/desired-models" || url.pathname === "/api/access-keys" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/settings/openrouter-key" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || desiredModelMatch || accessKeyMatch || accessKeyOverridesMatch || accessKeyOverridesPreviewMatch || accessKeyOverrideModelMatch || accessKeyOverridePreviewMatch || policyMatch || requestDetailMatch;
+          const knownRoute = url.pathname === "/api/status" || url.pathname === "/api/models" || url.pathname === "/api/models/refresh" || url.pathname === "/api/desired-models" || url.pathname === "/api/access-keys" || url.pathname === "/api/launcher/shortcut" || url.pathname === "/api/policies" || url.pathname === "/api/policies/preview" || url.pathname === "/api/settings" || url.pathname === "/api/settings/openrouter-key" || url.pathname === "/api/requests" || endpointMatch || endpointRefreshMatch || modelDetailMatch || desiredModelMatch || accessKeyMatch || accessKeySecretMatch || accessKeyOverridesMatch || accessKeyOverridesPreviewMatch || accessKeyOverrideModelMatch || accessKeyOverridePreviewMatch || policyMatch || requestDetailMatch;
           return writeError(res, knownRoute ? 405 : 404, knownRoute ? "Method not allowed" : "Management API endpoint not found", knownRoute ? "ERR_METHOD_NOT_ALLOWED" : "API_NOT_FOUND");
         } catch (err: any) {
           if (err instanceof OpenRouterMetadataError) return metadataError(err);
@@ -1129,7 +1169,7 @@ export function startServer(cfg: ShimConfig, options: { secureStore?: SecureKeyS
   // and inference remain independent of this best-effort telemetry work.
   void refreshDesiredEndpoints();
   setDesiredRefreshInterval(controlSettings.desiredEndpointRefreshIntervalMs ?? 60_000);
-  server.once("close", () => { if (desiredRefreshTimer) clearInterval(desiredRefreshTimer); });
+  server.once("close", () => { if (desiredRefreshTimer) clearInterval(desiredRefreshTimer); launcherLease?.close(); });
 
   return server;
 }

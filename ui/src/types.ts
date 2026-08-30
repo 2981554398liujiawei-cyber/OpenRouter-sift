@@ -129,6 +129,7 @@ export interface AccessKey {
   createdAt?: string;
   updatedAt?: string;
   lastUsedAt: string | null;
+  secretStorage: "secure-store" | "unavailable" | "legacy";
 }
 
 export interface AccessKeySecret extends AccessKey { secret: string }
